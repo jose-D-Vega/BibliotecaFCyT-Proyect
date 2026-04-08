@@ -1,0 +1,21 @@
+# Variables de entorno (contiene datos sensibles)
+.env
+
+# Dependencias (se regeneran con "npm install")
+node_modules/
+
+# Logs de npm
+npm-debug.log*
+
+# Variables de entorno de otros entornos
+.env.local
+.env.production
+
+# Archivos del sistema operativo
+.DS_Store        # Mac
+Thumbs.db        # Windows
+
+# Archivos de editores de código
+.vscode/
+.idea/
+*.suo
