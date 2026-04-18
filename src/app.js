@@ -3,6 +3,7 @@ const cors = require('cors')
 require('dotenv').config()
 
 const healthRoutes = require('./routes/health.routes')
+const booksRoutes = require('./routes/books.routes')
 
 const app = express()
 
@@ -16,6 +17,7 @@ app.use(express.urlencoded({ extended: true }))
 
 // Rutas
 app.use('/api/health', healthRoutes)
+app.use('/api/books', booksRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
