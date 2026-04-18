@@ -1,9 +1,11 @@
 const express = require('express')
 const cors = require('cors')
+const passport = require('./config/passport')
 require('dotenv').config()
 
 const healthRoutes = require('./routes/health.routes')
 const booksRoutes = require('./routes/books.routes')
+const authRoutes = require('./routes/auth.routes')
 
 const app = express()
 
@@ -14,10 +16,12 @@ app.use(cors({
 }))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
+app.use(passport.initialize()) 
 
 // Rutas
 app.use('/api/health', healthRoutes)
 app.use('/api/books', booksRoutes)
+app.use('/api/auth', authRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
