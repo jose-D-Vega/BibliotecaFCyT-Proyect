@@ -6,6 +6,7 @@ require('dotenv').config()
 const healthRoutes = require('./routes/health.routes')
 const booksRoutes = require('./routes/books.routes')
 const authRoutes = require('./routes/auth.routes')
+const usersRoutes = require('./routes/users.routes')
 
 const app = express()
 
@@ -22,6 +23,7 @@ app.use(passport.initialize())
 app.use('/api/health', healthRoutes)
 app.use('/api/books', booksRoutes)
 app.use('/api/auth', authRoutes)
+app.use('/api/users', usersRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
