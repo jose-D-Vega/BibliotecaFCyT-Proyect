@@ -75,11 +75,12 @@ const updateBookHandler = async (req, res) => {
 const deleteBookHandler = async (req, res) => {
   try {
     const { id } = req.params
-    const book = await deleteBook(id)
+    const result = await deleteBook(id)
 
-    if (!book) return res.status(404).json({ error: 'Libro no encontrado' })
+    if (!result) return res.status(404).json({ error: 'Libro no encontrado' })
+    if (result.error) return res.status(400).json({ error: result.error })
 
-    res.json({ message: 'Libro eliminado exitosamente', data: book })
+    res.json({ message: 'Libro eliminado exitosamente', data: result })
   } catch (error) {
     console.error('Error al eliminar libro:', error)
     res.status(500).json({ error: 'Error interno del servidor' })

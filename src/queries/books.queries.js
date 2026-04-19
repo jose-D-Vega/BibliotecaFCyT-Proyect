@@ -110,14 +110,35 @@ const getBookById = async (id_libro) => {
 
 // Crear un libro nuevo
 const createBook = async ({ titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera }) => {
-  const query = `
-    INSERT INTO libros (titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    RETURNING *
-  `
-  const values = [titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera]
-  const { rows } = await pool.query(query, values)
-  return rows[0]
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows } = await client.query(
+      `INSERT INTO libros (titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera]
+    )
+
+    const libro = rows[0]
+
+    // Crear automáticamente los ejemplares según cantidad_ejemplar
+    for (let i = 0; i < cantidad_ejemplar; i++) {
+      await client.query(
+        `INSERT INTO ejemplares (estado_ejemplar, id_libro) VALUES ('disponible', $1)`,
+        [libro.id_libro]
+      )
+    }
+
+    await client.query('COMMIT')
+    return libro
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 // Actualizar un libro
@@ -149,9 +170,43 @@ const updateBook = async (id_libro, fields) => {
 
 // Eliminar un libro
 const deleteBook = async (id_libro) => {
-  const query = `DELETE FROM libros WHERE id_libro = $1 RETURNING *`
-  const { rows } = await pool.query(query, [id_libro])
-  return rows[0]
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    await client.query(
+      `UPDATE ejemplares SET estado_ejemplar = 'eliminado'
+       WHERE id_libro = $1 AND estado_ejemplar NOT IN ('prestado', 'reservado')`,
+      [id_libro]
+    )
+
+    // Verificar si quedaron ejemplares activos (prestados o reservados)
+    const { rows: activos } = await client.query(
+      `SELECT COUNT(*) FROM ejemplares
+       WHERE id_libro = $1 AND estado_ejemplar IN ('prestado', 'reservado')`,
+      [id_libro]
+    )
+
+    if (parseInt(activos[0].count) > 0) {
+      await client.query('ROLLBACK')
+      return { error: 'No se puede eliminar el libro. Tiene ejemplares prestados o reservados actualmente' }
+    }
+
+    const { rows } = await client.query(
+      `UPDATE libros SET activo = false
+       WHERE id_libro = $1
+       RETURNING *`,
+      [id_libro]
+    )
+
+    await client.query('COMMIT')
+    return rows[0] || null
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 module.exports = { getAllBooks, countBooks, getBookById, createBook, updateBook, deleteBook }

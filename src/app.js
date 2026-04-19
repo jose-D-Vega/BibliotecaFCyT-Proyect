@@ -5,6 +5,7 @@ require('dotenv').config()
 
 const healthRoutes = require('./routes/health.routes')
 const booksRoutes = require('./routes/books.routes')
+const copiesRoutes = require('./routes/copies.routes')
 const authRoutes = require('./routes/auth.routes')
 const usersRoutes = require('./routes/users.routes')
 
@@ -22,6 +23,7 @@ app.use(passport.initialize())
 // Rutas
 app.use('/api/health', healthRoutes)
 app.use('/api/books', booksRoutes)
+app.use('/api/books/:id_libro/copies', copiesRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/users', usersRoutes)
 
