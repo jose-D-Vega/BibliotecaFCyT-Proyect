@@ -3,6 +3,7 @@ const router = Router()
 const passport = require('../config/passport')
 const { verifyToken } = require('../middlewares/auth')
 const jwt = require('jsonwebtoken')
+const pool = require('../config/db')
 
 // Iniciar login con Google — el frontend redirige al usuario a esta URL
 router.get('/google', passport.authenticate('google', {
@@ -22,7 +23,7 @@ router.get('/google/callback',
       id_usuario: user.id_usuario,
       correo: user.correo,
       nombre: user.nombre_apellido,
-      rol: user.tipo_usuario // 'normal' o 'admin'
+      rol: user.rol, // rol real en la base de datos
     }
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' })
@@ -34,8 +35,22 @@ router.get('/google/callback',
 )
 
 // Obtener datos del usuario autenticado (para que el frontend verifique el token)
-router.get('/me', verifyToken, (req, res) => {
-  res.json({ data: req.user })
+router.get('/me', verifyToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id_usuario, u.nombre_apellido, u.correo, u.ci, u.telefono,
+              u.sancionado, u.activo, t.nombre_tipo AS rol
+       FROM usuarios u
+       JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
+       WHERE u.id_usuario = $1`,
+      [req.user.id_usuario]
+    )
+    if (rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' })
+    res.json({ data: rows[0] })
+  } catch (error) {
+    console.error('Error en /me:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
 })
 
 module.exports = router

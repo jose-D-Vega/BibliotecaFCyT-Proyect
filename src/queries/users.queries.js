@@ -133,6 +133,16 @@ const updateUserRol = async (id_usuario, id_tipo_usuario) => {
   return rows[0] || null
 }
 
+const updateUserCi = async (id_usuario, ci) => {
+  const { rows } = await pool.query(
+    `UPDATE usuarios SET ci = $1
+     WHERE id_usuario = $2
+     RETURNING *`,
+    [ci, id_usuario]
+  )
+  return rows[0] || null
+}
+
 // Solo el bibliotecario puede activar o desactivar una cuenta
 const updateUserActivo = async (id_usuario, activo) => {
   const { rows } = await pool.query(
@@ -149,4 +159,4 @@ const getTiposUsuario = async () => {
   return rows
 }
 
-module.exports = { getAllUsers, countUsers, getUserById, updateUser, updateUserRol, updateUserActivo, getTiposUsuario }
+module.exports = { getAllUsers, countUsers, getUserById, updateUser, updateUserRol, updateUserActivo, getTiposUsuario, updateUserCi }

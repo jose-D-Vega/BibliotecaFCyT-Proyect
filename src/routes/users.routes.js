@@ -1,6 +1,6 @@
 const { Router } = require('express')
 const router = Router()
-const { getUsers, getUser, updateOwnProfile, changeUserRol, toggleUserActivo, getTipos } = require('../controllers/users.controller')
+const { getUsers, getUser, updateOwnProfile, changeUserRol, toggleUserActivo, getTipos, updateCiHandler } = require('../controllers/users.controller')
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin } = require('../middlewares/roles')
 
@@ -13,5 +13,6 @@ router.put('/me', verifyToken, updateOwnProfile)
 router.get('/', verifyToken, isAdmin, getUsers)
 router.patch('/:id/rol', verifyToken, isAdmin, changeUserRol)
 router.patch('/:id/activo', verifyToken, isAdmin, toggleUserActivo)
+router.patch('/:id/ci', verifyToken, isAdmin, updateCiHandler)
 
 module.exports = router

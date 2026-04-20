@@ -1,4 +1,4 @@
-const { getAllUsers, countUsers, getUserById, updateUser, updateUserRol, updateUserActivo, getTiposUsuario } = require('../queries/users.queries')
+const { getAllUsers, countUsers, getUserById, updateUser, updateUserRol, updateUserActivo, getTiposUsuario, updateUserCi } = require('../queries/users.queries')
 
 // Bibliotecario — ver todos los usuarios
 const getUsers = async (req, res) => {
@@ -115,4 +115,22 @@ const getTipos = async (req, res) => {
   }
 }
 
-module.exports = { getUsers, getUser, updateOwnProfile, changeUserRol, toggleUserActivo, getTipos }
+//El bibliotecario debe poder actualzar la cedula de los usurios
+const updateCiHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { ci } = req.body
+
+    if (!ci) return res.status(400).json({ error: 'El campo ci es requerido' })
+
+    const user = await updateUserCi(id, ci)
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    res.json({ message: 'Cédula actualizada exitosamente', data: user })
+  } catch (error) {
+    console.error('Error al actualizar cédula:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+module.exports = { getUsers, getUser, updateOwnProfile, changeUserRol, toggleUserActivo, getTipos, updateCiHandler }
