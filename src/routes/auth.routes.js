@@ -38,7 +38,7 @@ router.get('/google/callback',
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT u.id_usuario, u.nombre_apellido, u.correo, u.ci, u.telefono,
+      `SELECT u.id_usuario, u.nombre_apellido as nombre, u.correo, u.ci, u.telefono,
               u.sancionado, u.activo, t.nombre_tipo AS rol
        FROM usuarios u
        JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
