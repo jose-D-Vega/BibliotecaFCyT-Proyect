@@ -4,6 +4,7 @@ const passport = require('../config/passport')
 const { verifyToken } = require('../middlewares/auth')
 const jwt = require('jsonwebtoken')
 const pool = require('../config/db')
+const { registrarSesion } = require('../queries/session.queries')
 
 // Iniciar login con Google — el frontend redirige al usuario a esta URL
 router.get('/google', passport.authenticate('google', {
@@ -27,7 +28,11 @@ router.get('/google/callback',
     }
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' })
-
+    
+    // Registrar la sesión en la base de datos (sin await para no retrasar la respuesta)
+    registrarSesion(user.id_usuario).catch(err =>
+      console.error('Error al registrar sesión:', err)
+    )
     // Redirigir al frontend con el token como query param
     // El frontend lo lee, lo guarda y elimina el param de la URL
     res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`)

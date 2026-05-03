@@ -2,6 +2,7 @@ const passport = require('passport')
 const GoogleStrategy = require('passport-google-oauth20').Strategy
 const pool = require('./db')
 require('dotenv').config()
+const { registrarActividad } = require('../queries/activity.queries')
 
 const INSTITUTIONAL_DOMAIN = 'fctunca.edu.py'
 
@@ -57,6 +58,16 @@ async (accessToken, refreshToken, profile, done) => {
        WHERE u.id_usuario = $1`,
       [newUser[0].id_usuario]
     )
+
+    // Registrar actividad de creación — no bloqueante
+    registrarActividad({
+      id_usuario: userWithRol[0].id_usuario,
+      tipo_accion: 'crear',
+      entidad: 'usuarios',
+      id_entidad: userWithRol[0].id_usuario,
+      descripcion: `Nuevo usuario registrado: "${userWithRol[0].nombre_apellido}" (${email})`
+    }).catch(err => console.error('Error al registrar actividad de creación de usuario:', err))
+
 
     return done(null, userWithRol[0])
   } catch (error) {

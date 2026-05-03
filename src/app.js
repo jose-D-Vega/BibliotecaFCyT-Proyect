@@ -9,6 +9,8 @@ const copiesRoutes = require('./routes/copies.routes')
 const authRoutes = require('./routes/auth.routes')
 const usersRoutes = require('./routes/users.routes')
 const loansRoutes = require('./routes/loans.routes')
+const activityRoutes = require('./routes/activity.routes')
+const sessionRoutes = require('./routes/session.routes')
 
 const app = express()
 
@@ -28,6 +30,8 @@ app.use('/api/books/:id_libro/copies', copiesRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/users', usersRoutes)
 app.use('/api/loans', loansRoutes)
+app.use('/api/activity', activityRoutes)
+app.use('/api/sessions', sessionRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {

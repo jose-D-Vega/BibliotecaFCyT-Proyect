@@ -173,13 +173,6 @@ const deleteBook = async (id_libro) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-
-    await client.query(
-      `UPDATE ejemplares SET estado_ejemplar = 'eliminado'
-       WHERE id_libro = $1 AND estado_ejemplar NOT IN ('prestado', 'reservado')`,
-      [id_libro]
-    )
-
     // Verificar si quedaron ejemplares activos (prestados o reservados)
     const { rows: activos } = await client.query(
       `SELECT COUNT(*) FROM ejemplares
@@ -191,6 +184,12 @@ const deleteBook = async (id_libro) => {
       await client.query('ROLLBACK')
       return { error: 'No se puede eliminar el libro. Tiene ejemplares prestados o reservados actualmente' }
     }
+
+    await client.query(
+      `UPDATE ejemplares SET estado_ejemplar = 'eliminado'
+       WHERE id_libro = $1 AND estado_ejemplar NOT IN ('prestado', 'reservado')`,
+      [id_libro]
+    )
 
     const { rows } = await client.query(
       `UPDATE libros SET activo = false

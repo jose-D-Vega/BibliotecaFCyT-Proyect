@@ -1,4 +1,5 @@
 const { getAllBooks, countBooks, getBookById, createBook, updateBook, deleteBook } = require('../queries/books.queries')
+const { registrarActividad } = require('../queries/activity.queries')
 
 const getBooks = async (req, res) => {
   try {
@@ -79,6 +80,14 @@ const deleteBookHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Libro no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
+
+    /*await registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'eliminar',
+      entidad: 'libros',
+      id_entidad: parseInt(id),
+      descripcion: `Eliminó el libro: ${result.titulo}`
+    })*/
 
     res.json({ message: 'Libro eliminado exitosamente', data: result })
   } catch (error) {

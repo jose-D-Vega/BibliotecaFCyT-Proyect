@@ -122,7 +122,7 @@ const updateUser = async (id_usuario, fields) => {
   )
   return rows[0] || null
 }
-// Solo el bibliotecario puede cambiar el rol de un usuario
+// Solo el admin puede cambiar el rol de un usuario
 const updateUserRol = async (id_usuario, id_tipo_usuario) => {
   const { rows } = await pool.query(
     `UPDATE usuarios SET id_tipo_usuario = $1
@@ -143,7 +143,7 @@ const updateUserCi = async (id_usuario, ci) => {
   return rows[0] || null
 }
 
-// Solo el bibliotecario puede activar o desactivar una cuenta
+// Solo el admin puede activar o desactivar una cuenta
 const updateUserActivo = async (id_usuario, activo) => {
   const { rows } = await pool.query(
     `UPDATE usuarios SET activo = $1
@@ -153,6 +153,7 @@ const updateUserActivo = async (id_usuario, activo) => {
   )
   return rows[0] || null
 }
+
 
 const getTiposUsuario = async () => {
   const { rows } = await pool.query('SELECT * FROM tipo_usuarios ORDER BY id_tipo_usuario ASC')

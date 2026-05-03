@@ -1,6 +1,10 @@
-const { getAllUsers, countUsers, getUserById, updateUser, updateUserRol, updateUserActivo, getTiposUsuario, updateUserCi } = require('../queries/users.queries')
+const {
+  getAllUsers, countUsers, getUserById, updateUser,
+  updateUserRol, updateUserActivo, getTiposUsuario, updateUserCi
+} = require('../queries/users.queries')
+const { registrarActividad } = require('../queries/activity.queries')
 
-// Bibliotecario — ver todos los usuarios
+// Admin — ver todos los usuarios
 const getUsers = async (req, res) => {
   try {
     const { search, rol, activo, page = 1, limit = 20 } = req.query
@@ -30,14 +34,16 @@ const getUsers = async (req, res) => {
   }
 }
 
-// Bibliotecario — ver un usuario por ID
-// Usuario normal — solo puede ver su propio perfil
+// Admin, bibliotecario — solo su propio perfil
+// Usuario normal — solo su propio perfil
 const getUser = async (req, res) => {
   try {
     const { id } = req.params
+    const solicitante = req.user
 
-    // Un usuario normal solo puede ver su propio perfil
-    if (req.user.rol === 'normal' && req.user.id_usuario !== parseInt(id)) {
+    // Bibliotecario y normal solo pueden ver su propio perfil
+    if (['normal', 'bibliotecario'].includes(solicitante.rol) &&
+        solicitante.id_usuario !== parseInt(id)) {
       return res.status(403).json({ error: 'No tenés permiso para ver este perfil' })
     }
 
@@ -51,12 +57,31 @@ const getUser = async (req, res) => {
   }
 }
 
-// Usuario normal — actualizar sus propios datos (ci, telefono)
+// Usuario normal y bibliotecario — actualizar ci (solo si está en 'pendiente') y telefono
 const updateOwnProfile = async (req, res) => {
   try {
     const id_usuario = req.user.id_usuario
-    const user = await updateUser(id_usuario, req.body)
+    const { ci, telefono } = req.body
+
+    const current = await getUserById(id_usuario)
+    if (!current) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    // Si ci viene en el body pero ya fue registrado, bloquearlo
+    if (ci !== undefined && current.ci !== 'pendiente') {
+      return res.status(400).json({ error: 'La cédula ya fue registrada. Contactá al administrador para modificarla' })
+    }
+
+    const user = await updateUser(id_usuario, { ci, telefono })
     if (!user) return res.status(400).json({ error: 'Sin campos válidos para actualizar' })
+
+    registrarActividad({
+      id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'usuarios',
+      id_entidad: id_usuario,
+      descripcion: `El usuario actualizó su propio perfil`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Perfil actualizado exitosamente', data: user })
   } catch (error) {
     console.error('Error al actualizar perfil:', error)
@@ -64,7 +89,7 @@ const updateOwnProfile = async (req, res) => {
   }
 }
 
-// Bibliotecario — cambiar el rol de un usuario
+// Admin — cambiar el rol de un usuario
 const changeUserRol = async (req, res) => {
   try {
     const { id } = req.params
@@ -74,8 +99,18 @@ const changeUserRol = async (req, res) => {
       return res.status(400).json({ error: 'El campo id_tipo_usuario es requerido' })
     }
 
+    const target = await getUserById(id)
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' })
+
     const user = await updateUserRol(id, id_tipo_usuario)
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'cambio_rol',
+      entidad: 'usuarios',
+      id_entidad: parseInt(id),
+      descripcion: `El admin cambió el rol de "${target.nombre_apellido}" de "${target.rol}" a id_tipo_usuario=${id_tipo_usuario}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Rol actualizado exitosamente', data: user })
   } catch (error) {
@@ -84,7 +119,7 @@ const changeUserRol = async (req, res) => {
   }
 }
 
-// Bibliotecario — activar o desactivar una cuenta
+// Admin — activar o desactivar una cuenta
 const toggleUserActivo = async (req, res) => {
   try {
     const { id } = req.params
@@ -94,12 +129,80 @@ const toggleUserActivo = async (req, res) => {
       return res.status(400).json({ error: 'El campo activo es requerido' })
     }
 
+    const target = await getUserById(id)
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' })
+
     const user = await updateUserActivo(id, activo)
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: activo ? 'activar' : 'eliminar',
+      entidad: 'usuarios',
+      id_entidad: parseInt(id),
+      descripcion: `El admin ${activo ? 'activó' : 'desactivó'} la cuenta de "${target.nombre_apellido}"`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: `Cuenta ${activo ? 'activada' : 'desactivada'} exitosamente`, data: user })
   } catch (error) {
     console.error('Error al actualizar estado:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+// Admin — actualizar CI de un usuario
+const updateCiHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { ci } = req.body
+
+    if (!ci) return res.status(400).json({ error: 'El campo ci es requerido' })
+
+    const target = await getUserById(id)
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    const user = await updateUserCi(id, ci)
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'usuarios',
+      id_entidad: parseInt(id),
+      descripcion: `El admin actualizó la cédula de "${target.nombre_apellido}"`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
+    res.json({ message: 'Cédula actualizada exitosamente', data: user })
+  } catch (error) {
+    console.error('Error al actualizar cédula:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+// Admin — borrado lógico de un usuario
+const deleteUserHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const target = await getUserById(id)
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' })
+
+    if (!target.activo) {
+      return res.status(400).json({ error: 'El usuario ya se encuentra inactivo' })
+    }
+
+    // Reutilizamos updateUserActivo en lugar de una query separada
+    const user = await updateUserActivo(id, false)
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'eliminar',
+      entidad: 'usuarios',
+      id_entidad: parseInt(id),
+      descripcion: `El admin desactivo la cuenta de "${target.nombre_apellido}"`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
+    res.json({ message: 'Usuario eliminado exitosamente', data: user })
+  } catch (error) {
+    console.error('Error al eliminar usuario:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
@@ -115,22 +218,7 @@ const getTipos = async (req, res) => {
   }
 }
 
-//El bibliotecario debe poder actualzar la cedula de los usurios
-const updateCiHandler = async (req, res) => {
-  try {
-    const { id } = req.params
-    const { ci } = req.body
-
-    if (!ci) return res.status(400).json({ error: 'El campo ci es requerido' })
-
-    const user = await updateUserCi(id, ci)
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' })
-
-    res.json({ message: 'Cédula actualizada exitosamente', data: user })
-  } catch (error) {
-    console.error('Error al actualizar cédula:', error)
-    res.status(500).json({ error: 'Error interno del servidor' })
-  }
+module.exports = {
+  getUsers, getUser, updateOwnProfile, changeUserRol,
+  toggleUserActivo, getTipos, updateCiHandler, deleteUserHandler
 }
-
-module.exports = { getUsers, getUser, updateOwnProfile, changeUserRol, toggleUserActivo, getTipos, updateCiHandler }
