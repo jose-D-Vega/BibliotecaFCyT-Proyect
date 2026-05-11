@@ -1,7 +1,7 @@
 const pool = require('../config/db')
 
 // Obtener todos los libros con cantidad de ejemplares disponibles
-const getAllBooks = async ({ search, tipo_material, carrera, limit, offset }) => {
+const getAllBooks = async ({ search, orden, tipo_material, carrera, limit, offset }) => {
   const values = []
   let paramIndex = 1
   let whereClause = 'WHERE 1=1'
@@ -21,6 +21,13 @@ const getAllBooks = async ({ search, tipo_material, carrera, limit, offset }) =>
     values.push(carrera)
     paramIndex++
   }
+  
+
+  let orderClause = 'ORDER BY l.titulo ASC' // default
+
+  if (orden === 'ZA') orderClause = 'ORDER BY l.titulo DESC'
+  if (orden === 'EJ_DESC') orderClause = 'ORDER BY ejemplares_disponibles DESC'
+  if (orden === 'EJ_ASC') orderClause = 'ORDER BY ejemplares_disponibles ASC'
 
   values.push(limit)
   values.push(offset)
@@ -36,13 +43,14 @@ const getAllBooks = async ({ search, tipo_material, carrera, limit, offset }) =>
       l.carrera,
       l.facultad,
       l.ciudad,
+      l.imagen_url,
       l.cantidad_ejemplar,
       COUNT(e.id_ejemplar) FILTER (WHERE e.estado_ejemplar = 'disponible') AS ejemplares_disponibles
     FROM libros l
     LEFT JOIN ejemplares e ON l.id_libro = e.id_libro
     ${whereClause}
     GROUP BY l.id_libro
-    ORDER BY l.titulo ASC
+    ${orderClause}
     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
   `
 
@@ -109,16 +117,16 @@ const getBookById = async (id_libro) => {
 }
 
 // Crear un libro nuevo
-const createBook = async ({ titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera }) => {
+const createBook = async ({ titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera, imagen_url }) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
     const { rows } = await client.query(
-      `INSERT INTO libros (titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera]
+      `INSERT INTO libros (titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera, imagen_url)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *`,
+      [titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_material, anio_publicacion, editorial, carrera, imagen_url]
     )
 
     const libro = rows[0]
@@ -143,7 +151,7 @@ const createBook = async ({ titulo, autor, cantidad_ejemplar, ciudad, facultad, 
 
 // Actualizar un libro
 const updateBook = async (id_libro, fields) => {
-  const allowed = ['titulo', 'autor', 'cantidad_ejemplar', 'ciudad', 'facultad', 'tipo_material', 'anio_publicacion', 'editorial', 'carrera']
+  const allowed = ['titulo', 'autor', 'cantidad_ejemplar', 'ciudad', 'facultad', 'tipo_material', 'anio_publicacion', 'editorial', 'carrera', 'imagen_url']
   const updates = []
   const values = []
   let paramIndex = 1

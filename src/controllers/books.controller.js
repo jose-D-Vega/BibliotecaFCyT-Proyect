@@ -1,13 +1,14 @@
 const { getAllBooks, countBooks, getBookById, createBook, updateBook, deleteBook } = require('../queries/books.queries')
 const { registrarActividad } = require('../queries/activity.queries')
+const { subirImagen, eliminarImagen } = require('../utils/storage')
 
 const getBooks = async (req, res) => {
   try {
-    const { search, tipo_material, carrera } = req.query
+    const { search, orden, tipo_material, carrera } = req.query
     const page = parseInt(req.query.page) || 1
     const limit = parseInt(req.query.limit) || 20
     const offset = (page - 1) * limit
-    const filters = { search, tipo_material, carrera, limit, offset }
+    const filters = { search, orden, tipo_material, carrera, limit, offset }
 
     const [books, total] = await Promise.all([
       getAllBooks(filters),
@@ -48,10 +49,25 @@ const createBookHandler = async (req, res) => {
     const { titulo, autor, cantidad_ejemplar, tipo_material, anio_publicacion, ciudad, facultad, editorial, carrera } = req.body
 
     if (!titulo || !autor || !cantidad_ejemplar || !tipo_material || !anio_publicacion) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios: titulo, autor, cantidad_ejemplar, tipo_material, anio_publicacion' })
+      return res.status(400).json({ error: 'Faltan campos obligatorios' })
     }
 
-    const book = await createBook(req.body)
+    let imagen_url = null
+
+    if (req.file) {
+      imagen_url = await subirImagen(req.file.buffer, req.file.mimetype, req.file.originalname)
+    }
+
+    const book = await createBook({ ...req.body, imagen_url })
+
+    /*await registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'crear',
+      entidad: 'libros',
+      id_entidad: book.id_libro,
+      descripcion: `Creó el libro: ${book.titulo}`
+    })*/
+
     res.status(201).json({ message: 'Libro creado exitosamente', data: book })
   } catch (error) {
     console.error('Error al crear libro:', error)
@@ -62,8 +78,21 @@ const createBookHandler = async (req, res) => {
 const updateBookHandler = async (req, res) => {
   try {
     const { id } = req.params
-    const book = await updateBook(id, req.body)
+    let updateData = { ...req.body }
 
+    if (req.file) {
+      // Obtener imagen actual para eliminarla
+      const libroActual = await getBookById(id)
+      if (libroActual?.imagen_url) {
+        // Extraer nombre del archivo de la URL
+        const nombreActual = libroActual.imagen_url.split('/').pop()
+        await eliminarImagen(nombreActual).catch(() => {}) // no fallar si no existe
+      }
+
+      updateData.imagen_url = await subirImagen(req.file.buffer, req.file.mimetype, req.file.originalname)
+    }
+
+    const book = await updateBook(id, updateData)
     if (!book) return res.status(404).json({ error: 'Libro no encontrado o sin cambios' })
 
     res.json({ message: 'Libro actualizado exitosamente', data: book })
@@ -72,6 +101,7 @@ const updateBookHandler = async (req, res) => {
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
+
 
 const deleteBookHandler = async (req, res) => {
   try {

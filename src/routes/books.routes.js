@@ -3,6 +3,7 @@ const router = Router()
 const { getBooks, getBook, createBookHandler, updateBookHandler, deleteBookHandler } = require('../controllers/books.controller')
 const { verifyToken } = require('../middlewares/auth')
 const { isBibliotecario, isAdmin } = require('../middlewares/roles')
+const upload = require('../middlewares/upload')
 
 
 // Rutas públicas — cualquiera puede ver el catálogo
@@ -17,7 +18,7 @@ router.get('/:id', getBook)
 router.delete('/:id', verifyToken, isAdmin, deleteBookHandler)
 
 // Crear y editar — bibliotecario y admin
-router.post('/', verifyToken, isBibliotecario, createBookHandler)
-router.put('/:id', verifyToken, isBibliotecario, updateBookHandler)
+router.post('/', verifyToken, isBibliotecario, upload.single('imagen'), createBookHandler)
+router.put('/:id', verifyToken, isBibliotecario, upload.single('imagen'), updateBookHandler)
 
 module.exports = router
