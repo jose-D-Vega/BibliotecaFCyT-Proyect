@@ -16,12 +16,19 @@ const getAllBooks = async ({ search, orden, tipo_material, carrera, limit, offse
     values.push(tipo_material)
     paramIndex++
   }
-  if (carrera) {
-    whereClause += ` AND l.carrera = $${paramIndex}`
-    values.push(carrera)
-    paramIndex++
-  }
   
+
+  if (carrera) {
+    const listaCarreras = carrera.split(',').map(c => c.trim()).filter(Boolean)
+    if (listaCarreras.length > 0) {
+      const condiciones = listaCarreras.map((c) => {
+        values.push(`%${c}%`)
+        const idx = paramIndex++
+        return `l.carrera ILIKE $${idx}`
+      })
+      whereClause += ` AND (${condiciones.join(' OR ')})`
+    }
+  }
 
   let orderClause = 'ORDER BY l.titulo ASC' // default
 
@@ -65,22 +72,28 @@ const countBooks = async ({ search, tipo_material, carrera }) => {
   let whereClause = 'WHERE 1=1'
 
   if (search) {
-    whereClause += ` AND (titulo ILIKE $${paramIndex} OR autor ILIKE $${paramIndex})`
+    whereClause += ` AND (l.titulo ILIKE $${paramIndex} OR l.autor ILIKE $${paramIndex})`
     values.push(`%${search}%`)
     paramIndex++
   }
   if (tipo_material) {
-    whereClause += ` AND tipo_material = $${paramIndex}`
+    whereClause += ` AND l.tipo_material = $${paramIndex}`
     values.push(tipo_material)
     paramIndex++
   }
   if (carrera) {
-    whereClause += ` AND carrera = $${paramIndex}`
-    values.push(carrera)
-    paramIndex++
+    const listaCarreras = carrera.split(',').map(c => c.trim()).filter(Boolean)
+    if (listaCarreras.length > 0) {
+      const condiciones = listaCarreras.map((c) => {
+        values.push(`%${c}%`)
+        const idx = paramIndex++
+        return `l.carrera ILIKE $${idx}`
+      })
+      whereClause += ` AND (${condiciones.join(' OR ')})`
+    }
   }
 
-  const query = `SELECT COUNT(*) FROM libros ${whereClause}`
+  const query = `SELECT COUNT(*) FROM libros l ${whereClause}`
   const { rows } = await pool.query(query, values)
   return parseInt(rows[0].count)
 }
