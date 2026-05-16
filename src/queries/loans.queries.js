@@ -4,11 +4,16 @@ const pool = require('../config/db')
 const _insertLoan = async (client, id_usuario, ejemplares, esReserva) => {
   const estado = esReserva ? 'solicitud_reserva' : 'solicitado'
 
+   // fecha_tope_devolucion es NOT NULL en la BD pero se asigna realmente
+  // al activar el préstamo — usamos un placeholder de 30 días
+  const fechaPlaceholder = new Date()
+  fechaPlaceholder.setDate(fechaPlaceholder.getDate() + 30)
+
   const { rows: prestamo } = await client.query(
-    `INSERT INTO prestamos (fecha_solicitud, estado_prestamo, id_usuario, es_reserva)
-     VALUES (NOW(), $1, $2, $3)
+    `INSERT INTO prestamos (fecha_solicitud, fecha_tope_devolucion, estado_prestamo, id_usuario, es_reserva)
+     VALUES (NOW(), $1, $2, $3, $4)
      RETURNING *`,
-    [estado, id_usuario, esReserva]
+    [fechaPlaceholder, estado, id_usuario, esReserva]
   )
 
   const id_prestamo = prestamo[0].id_prestamo
@@ -24,64 +29,78 @@ const _insertLoan = async (client, id_usuario, ejemplares, esReserva) => {
   return prestamo[0]
 }
 
-// Crear solicitud desde el carrito — genera hasta dos registros en prestamos
-const createLoan = async (id_usuario, ejemplaresDisponibles, ejemplaresReserva) => {
+
+const createLoan = async (id_usuario, itemsCarrito) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
-    const resultados = {}
+    const ejemplaresParaPrestamo = []
+    const ejemplaresParaReserva = []
+    const advertencias = []
 
-    // --- Préstamo normal ---
-    if (ejemplaresDisponibles.length > 0) {
+    for (const item of itemsCarrito) {
+      const { id_libro, cantidad } = item
 
-      // Verificar que todos siguen disponibles
-      const { rows: verificados } = await client.query(
-        `SELECT id_ejemplar, estado_ejemplar FROM ejemplares
-         WHERE id_ejemplar = ANY($1)`,
-        [ejemplaresDisponibles]
+      // Obtener ejemplares disponibles del libro
+      const { rows: disponibles } = await client.query(
+        `SELECT id_ejemplar FROM ejemplares
+         WHERE id_libro = $1 AND estado_ejemplar = 'disponible'
+         ORDER BY id_ejemplar ASC
+         LIMIT $2`,
+        [id_libro, cantidad]
       )
 
-      const noDisponibles = verificados.filter(e => e.estado_ejemplar !== 'disponible')
-      if (noDisponibles.length > 0) {
-        await client.query('ROLLBACK')
-        return {
-          error: `Los siguientes ejemplares ya no están disponibles: ${noDisponibles.map(e => e.id_ejemplar).join(', ')}`
+      const cantidadDisponible = disponibles.length
+
+      if (cantidadDisponible >= cantidad) {
+        // Todos van como préstamo
+        ejemplaresParaPrestamo.push(...disponibles.map(e => e.id_ejemplar))
+      } else {
+        // Los disponibles van como préstamo, el resto como reserva
+        ejemplaresParaPrestamo.push(...disponibles.map(e => e.id_ejemplar))
+
+        const faltantes = cantidad - cantidadDisponible
+
+        const { rows: reservables } = await client.query(
+          `SELECT id_ejemplar FROM ejemplares
+           WHERE id_libro = $1 AND estado_ejemplar IN ('prestado', 'reservado')
+           ORDER BY id_ejemplar ASC
+           LIMIT $2`,
+          [id_libro, faltantes]
+        )
+
+        if (reservables.length === 0 && cantidadDisponible === 0) {
+          await client.query('ROLLBACK')
+          return {
+            error: `No hay ejemplares disponibles ni reservables para el libro con id ${id_libro}`
+          }
+        }
+
+        ejemplaresParaReserva.push(...reservables.map(e => e.id_ejemplar))
+
+        if (reservables.length < faltantes) {
+          advertencias.push(
+            `Solo se pudieron asignar ${cantidadDisponible + reservables.length} de ${cantidad} ejemplares solicitados para el libro con id ${id_libro}`
+          )
         }
       }
+    }
 
-      const prestamo = await _insertLoan(client, id_usuario, ejemplaresDisponibles, false)
+    const resultados = {}
+
+    if (ejemplaresParaPrestamo.length > 0) {
+      const prestamo = await _insertLoan(client, id_usuario, ejemplaresParaPrestamo, false)
       resultados.prestamo = prestamo
     }
 
-    // --- Reserva ---
-    if (ejemplaresReserva.length > 0) {
-
-      // Verificar que todos siguen prestados o reservados (no disponibles)
-      const { rows: verificados } = await client.query(
-        `SELECT id_ejemplar, estado_ejemplar FROM ejemplares
-         WHERE id_ejemplar = ANY($1)`,
-        [ejemplaresReserva]
-      )
-
-      const yaDisponibles = verificados.filter(e => e.estado_ejemplar === 'disponible')
-      if (yaDisponibles.length > 0) {
-        await client.query('ROLLBACK')
-        return {
-          error: `Los siguientes ejemplares ahora están disponibles, agregalos como préstamo: ${yaDisponibles.map(e => e.id_ejemplar).join(', ')}`
-        }
-      }
-
-      const yaEliminados = verificados.filter(e => e.estado_ejemplar === 'eliminado')
-      if (yaEliminados.length > 0) {
-        await client.query('ROLLBACK')
-        return {
-          error: `Los siguientes ejemplares no están disponibles para reserva: ${yaEliminados.map(e => e.id_ejemplar).join(', ')}`
-        }
-      }
-
-      const reserva = await _insertLoan(client, id_usuario, ejemplaresReserva, true)
+    if (ejemplaresParaReserva.length > 0) {
+      const reserva = await _insertLoan(client, id_usuario, ejemplaresParaReserva, true)
       resultados.reserva = reserva
+    }
+
+    if (advertencias.length > 0) {
+      resultados.advertencias = advertencias
     }
 
     await client.query('COMMIT')

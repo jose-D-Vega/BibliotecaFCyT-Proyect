@@ -11,19 +11,31 @@ const {
 
 const createLoanHandler = async (req, res) => {
   try {
-    const { prestamo = [], reserva = [] } = req.body
+    const { items } = req.body
     const id_usuario = req.user.id_usuario
-    const id_bibliotecario = req.user.id_usuario // se actualiza cuando el bibliotecario responde
 
-    if (prestamo.length === 0 && reserva.length === 0) {
+    if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'El carrito está vacío' })
     }
 
-    const result = await createLoan(id_usuario, id_bibliotecario, prestamo, reserva)
+    // Validar estructura de cada item
+    for (const item of items) {
+      if (!item.id_libro || !item.cantidad || item.cantidad < 1) {
+        return res.status(400).json({
+          error: 'Cada item debe tener id_libro y cantidad mayor a 0'
+        })
+      }
+    }
+
+    const result = await createLoan(id_usuario, items)
 
     if (result.error) return res.status(400).json({ error: result.error })
 
-    res.status(201).json({ message: 'Solicitud creada exitosamente', data: result })
+    res.status(201).json({
+      message: 'Solicitud creada exitosamente',
+      data: result,
+      ...(result.advertencias && { advertencias: result.advertencias })
+    })
   } catch (error) {
     console.error('Error al crear préstamo:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
