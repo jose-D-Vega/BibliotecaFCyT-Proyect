@@ -97,16 +97,26 @@ const cancelLoanHandler = async (req, res) => {
 
 const getLoansHandler = async (req, res) => {
   try {
-    const { estado, es_reserva, page = 1, limit = 20 } = req.query
+    const { estado, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
     const parsedLimit = parseInt(limit)
     const parsedPage = parseInt(page)
     const offset = (parsedPage - 1) * parsedLimit
 
-    // Usuario normal solo ve sus propios préstamos
-    const id_usuario = req.user.rol === 'normal' ? req.user.id_usuario : req.query.id_usuario
+    // Normal y bibliotecario actuando como usuario solo ven los suyos
+    const id_usuario = ['normal', 'bibliotecario'].includes(req.user.rol)
+      ? req.user.id_usuario
+      : req.query.id_usuario
 
     const esReservaFilter = es_reserva !== undefined ? es_reserva === 'true' : undefined
-    const filters = { id_usuario, estado, es_reserva: esReservaFilter, limit: parsedLimit, offset }
+    const filters = {
+      id_usuario,
+      estado,
+      es_reserva: esReservaFilter,
+      fecha_desde,
+      fecha_hasta,
+      limit: parsedLimit,
+      offset
+    }
 
     const [loans, total] = await Promise.all([
       getLoans(filters),

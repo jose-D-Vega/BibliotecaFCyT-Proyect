@@ -296,7 +296,8 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
 }
 
 // Listar préstamos con filtros
-const getLoans = async ({ id_usuario, estado, es_reserva, limit, offset }) => {
+
+const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta, limit, offset }) => {
   const values = []
   let paramIndex = 1
   let whereClause = 'WHERE 1=1'
@@ -314,6 +315,16 @@ const getLoans = async ({ id_usuario, estado, es_reserva, limit, offset }) => {
   if (es_reserva !== undefined) {
     whereClause += ` AND p.es_reserva = $${paramIndex}`
     values.push(es_reserva)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND p.fecha_solicitud >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND p.fecha_solicitud <= $${paramIndex}::date + INTERVAL '1 day'`
+    values.push(fecha_hasta)
     paramIndex++
   }
 
@@ -338,7 +349,7 @@ const getLoans = async ({ id_usuario, estado, es_reserva, limit, offset }) => {
   return rows
 }
 
-const countLoans = async ({ id_usuario, estado, es_reserva }) => {
+const countLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta }) => {
   const values = []
   let paramIndex = 1
   let whereClause = 'WHERE 1=1'
@@ -356,6 +367,16 @@ const countLoans = async ({ id_usuario, estado, es_reserva }) => {
   if (es_reserva !== undefined) {
     whereClause += ` AND es_reserva = $${paramIndex}`
     values.push(es_reserva)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND fecha_solicitud >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND fecha_solicitud <= $${paramIndex}::date + INTERVAL '1 day'`
+    values.push(fecha_hasta)
     paramIndex++
   }
 
