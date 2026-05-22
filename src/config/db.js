@@ -9,9 +9,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 })
 
-pool.connect()
+pool.query('SELECT NOW()')
   .then(() => console.log('Conectado a la base de datos'))
-  .catch((err) => console.error('Error al conectar a la base de datos:', err))
+  .catch((err) => console.error('Error al conectar:', err))
 
 pool.on('error', (err) => {
   console.error('Error inesperado en el pool de conexiones:', err)
