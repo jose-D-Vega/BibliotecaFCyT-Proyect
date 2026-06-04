@@ -175,11 +175,11 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
     // Un solo UPDATE con el estado final correcto
     const { rows: prestamo_actualizado } = await client.query(
       `UPDATE prestamos
-      SET estado_prestamo = $1,
+      SET estado_prestamo = $1::varchar,
           fecha_respuesta = NOW(),
           id_bibliotecario = $2,
           fecha_tope_devolucion = CASE
-            WHEN $1 = 'pendiente_devolucion' THEN $4
+            WHEN $1::varchar = 'pendiente_devolucion' THEN $4
             ELSE fecha_tope_devolucion
           END
       WHERE id_prestamo = $3

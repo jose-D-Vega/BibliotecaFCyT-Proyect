@@ -12,6 +12,7 @@ const loansRoutes = require('./routes/loans.routes')
 const activityRoutes = require('./routes/activity.routes')
 const sessionRoutes = require('./routes/session.routes')
 const notificationsRoutes = require('./routes/notifications.routes')
+const returnsRoutes = require('./routes/returns.routes')
 
 const app = express()
 
@@ -34,6 +35,7 @@ app.use('/api/loans', loansRoutes)
 app.use('/api/activity', activityRoutes)
 app.use('/api/sessions', sessionRoutes)
 app.use('/api/notifications', notificationsRoutes)
+app.use('/api/returns', returnsRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {

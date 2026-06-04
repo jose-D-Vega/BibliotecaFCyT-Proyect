@@ -1,0 +1,257 @@
+const pool = require('../config/db')
+
+// Buscar préstamos activos por datos del usuario
+const searchActiveLoans = async (search) => {
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.fecha_solicitud,
+       p.fecha_tope_devolucion,
+       p.estado_prestamo,
+       p.es_reserva,
+       p.numero_renovacion,
+       u.id_usuario,
+       u.nombre_apellido,
+       u.correo,
+       u.ci,
+       COUNT(dp.id_ejemplar) FILTER (
+         WHERE dp.estado_prestamo_ejemplar = 'activo'
+       ) AS ejemplares_pendientes
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion')
+       AND (
+         u.nombre_apellido ILIKE $1 OR
+         u.correo ILIKE $1 OR
+         u.ci ILIKE $1
+       )
+     GROUP BY p.id_prestamo, u.id_usuario
+     HAVING COUNT(dp.id_ejemplar) FILTER (
+       WHERE dp.estado_prestamo_ejemplar = 'activo'
+     ) > 0
+     ORDER BY p.fecha_tope_devolucion ASC`,
+    [`%${search}%`]
+  )
+  return rows
+}
+
+// Obtener detalle de un préstamo con ejemplares pendientes
+const getLoanForReturn = async (id_prestamo) => {
+  const { rows: prestamo } = await pool.query(
+    `SELECT
+       p.*,
+       u.nombre_apellido,
+       u.correo,
+       u.ci
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     WHERE p.id_prestamo = $1
+       AND p.estado_prestamo IN ('activo', 'pendiente_devolucion')`,
+    [id_prestamo]
+  )
+
+  if (prestamo.length === 0) return null
+
+  const { rows: ejemplares } = await pool.query(
+    `SELECT
+       dp.id_ejemplar,
+       dp.estado_prestamo_ejemplar,
+       dp.observaciones,
+       e.estado_ejemplar,
+       l.id_libro,
+       l.titulo,
+       l.autor
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     WHERE dp.id_prestamo = $1
+       AND dp.estado_prestamo_ejemplar = 'activo'`,
+    [id_prestamo]
+  )
+
+  return { ...prestamo[0], ejemplares }
+}
+
+// Registrar devolución de ejemplares
+const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
+  // devoluciones = [{ id_ejemplar, estado_devuelto, observaciones }]
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    for (const dev of devoluciones) {
+      // Insertar en devoluciones
+      await client.query(
+        `INSERT INTO devoluciones
+           (id_prestamo, id_ejemplar, id_bibliotecario, estado_devuelto, observaciones)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id_prestamo, dev.id_ejemplar, id_bibliotecario, dev.estado_devuelto, dev.observaciones || null]
+      )
+
+      // Actualizar detalle del préstamo
+      await client.query(
+        `UPDATE detalles_prestamos
+         SET estado_prestamo_ejemplar = 'devuelto',
+             id_bibliotecario = $1
+         WHERE id_prestamo = $2 AND id_ejemplar = $3`,
+        [id_bibliotecario, id_prestamo, dev.id_ejemplar]
+      )
+
+      // Liberar el ejemplar
+      await client.query(
+        `UPDATE ejemplares SET estado_ejemplar = 'disponible'
+         WHERE id_ejemplar = $1`,
+        [dev.id_ejemplar]
+      )
+    }
+
+    // Verificar si quedan ejemplares activos en el préstamo
+    const { rows: pendientes } = await client.query(
+      `SELECT COUNT(*) FROM detalles_prestamos
+       WHERE id_prestamo = $1
+         AND estado_prestamo_ejemplar = 'activo'`,
+      [id_prestamo]
+    )
+
+    const quedanPendientes = parseInt(pendientes[0].count) > 0
+
+    // Si no quedan pendientes, cerrar el préstamo
+    if (!quedanPendientes) {
+      await client.query(
+        `UPDATE prestamos SET estado_prestamo = 'devuelto'
+         WHERE id_prestamo = $1`,
+        [id_prestamo]
+      )
+    }
+
+    await client.query('COMMIT')
+
+    return {
+      devueltos: devoluciones.length,
+      prestamo_cerrado: !quedanPendientes,
+      ejemplares_pendientes: parseInt(pendientes[0].count)
+    }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+const getHistorial = async ({ search, fecha_desde, fecha_hasta, limit, offset }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (search) {
+    whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+
+  values.push(limit)
+  values.push(offset)
+
+  const { rows } = await pool.query(
+    `SELECT
+       d.id_devolucion,
+       d.fecha_devolucion,
+       d.estado_devuelto,
+       d.observaciones,
+       d.id_prestamo,
+       d.id_ejemplar,
+       e.id_libro,
+       l.titulo,
+       l.autor,
+       u.nombre_apellido,
+       u.correo,
+       u.ci,
+       b.nombre_apellido AS bibliotecario
+     FROM devoluciones d
+     JOIN prestamos p ON d.id_prestamo = p.id_prestamo
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN ejemplares e ON d.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     JOIN usuarios b ON d.id_bibliotecario = b.id_usuario
+     ${whereClause}
+     ORDER BY d.fecha_devolucion DESC
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
+  return rows
+}
+
+const countHistorial = async ({ search, fecha_desde, fecha_hasta }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (search) {
+    whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) FROM devoluciones d
+     JOIN prestamos p ON d.id_prestamo = p.id_prestamo
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     ${whereClause}`,
+    values
+  )
+  return parseInt(rows[0].count)
+}
+const getAllActiveLoans = async () => {
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.fecha_solicitud,
+       p.fecha_tope_devolucion,
+       p.fecha_respuesta,
+       p.fecha_activacion,
+       p.estado_prestamo,
+       p.es_reserva,
+       p.numero_renovacion,
+       u.id_usuario,
+       u.nombre_apellido,
+       u.correo,
+       u.ci,
+       COUNT(dp.id_ejemplar) FILTER (
+         WHERE dp.estado_prestamo_ejemplar = 'activo'
+       ) AS ejemplares_pendientes
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion')
+     GROUP BY p.id_prestamo, u.id_usuario
+     HAVING COUNT(dp.id_ejemplar) FILTER (
+       WHERE dp.estado_prestamo_ejemplar = 'activo'
+     ) > 0
+     ORDER BY p.fecha_tope_devolucion ASC`
+  )
+  return rows
+}
+
+module.exports = { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial, countHistorial }
