@@ -1,4 +1,6 @@
-const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial, countHistorial } = require('../queries/returns.queries')
+const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial,
+   countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
+   getDetalleDevoluciones } = require('../queries/returns.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
   try {
@@ -95,4 +97,40 @@ const getHistorialHandler = async (req, res) => {
   }
 }
 
-module.exports = { searchLoansHandler, getAllActiveLoansHandler, getLoanHandler, registerReturnHandler, getHistorialHandler }
+const getPrestamosConDevolucionesHandler = async (req, res) => {
+  try {
+    const { search, fecha_desde, fecha_hasta, id_bibliotecario, page = 1, limit = 12 } = req.query
+    const parsedLimit = parseInt(limit)
+    const parsedPage = parseInt(page)
+    const offset = (parsedPage - 1) * parsedLimit
+    const filters = { search, fecha_desde, fecha_hasta, id_bibliotecario, limit: parsedLimit, offset }
+
+    const [prestamos, total] = await Promise.all([
+      getPrestamosConDevoluciones(filters),
+      countPrestamosConDevoluciones(filters)
+    ])
+
+    res.json({
+      data: prestamos,
+      pagination: { total, page: parsedPage, limit: parsedLimit, totalPages: Math.ceil(total / parsedLimit) }
+    })
+  } catch (error) {
+    console.error('Error al obtener préstamos con devoluciones:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const getDetalleDevolucionesHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const data = await getDetalleDevoluciones(id)
+    res.json({ data })
+  } catch (error) {
+    console.error('Error al obtener detalle:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+module.exports = { searchLoansHandler, getAllActiveLoansHandler, 
+  getLoanHandler, registerReturnHandler, 
+  getHistorialHandler, getPrestamosConDevolucionesHandler, getDetalleDevolucionesHandler }

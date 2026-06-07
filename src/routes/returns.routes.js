@@ -1,15 +1,42 @@
-const { Router } = require('express')
-const router = Router()
-const { searchLoansHandler, getAllActiveLoansHandler, getLoanHandler, registerReturnHandler, getHistorialHandler } = require('../controllers/returns.controller')
-const { verifyToken } = require('../middlewares/auth')
-const { isBibliotecario } = require('../middlewares/roles')
+const { Router } = require("express");
+const router = Router();
+const {
+  searchLoansHandler,
+  getAllActiveLoansHandler,
+  getLoanHandler,
+  registerReturnHandler,
+  getHistorialHandler,
+  getPrestamosConDevolucionesHandler,
+  getDetalleDevolucionesHandler,
+} = require("../controllers/returns.controller");
+const { verifyToken } = require("../middlewares/auth");
+const { isBibliotecario } = require("../middlewares/roles");
 
 // Solo bibliotecario y admin
 
-router.get('/activos', verifyToken, isBibliotecario, getAllActiveLoansHandler)
-router.get('/search', verifyToken, isBibliotecario, searchLoansHandler)
-router.get('/historial', verifyToken, isBibliotecario, getHistorialHandler)
-router.get('/:id', verifyToken, isBibliotecario, getLoanHandler)           // ← siempre al final
-router.post('/:id/devolver', verifyToken, isBibliotecario, registerReturnHandler)
+router.get("/activos", verifyToken, isBibliotecario, getAllActiveLoansHandler);
+router.get("/search", verifyToken, isBibliotecario, searchLoansHandler);
+router.get("/historial", verifyToken, isBibliotecario, getHistorialHandler);
 
-module.exports = router
+router.get(
+  "/historial-prestamos",
+  verifyToken,
+  isBibliotecario,
+  getPrestamosConDevolucionesHandler,
+);
+router.get(
+  "/:id/detalle-devoluciones",
+  verifyToken,
+  isBibliotecario,
+  getDetalleDevolucionesHandler,
+);
+
+router.post(
+  "/:id/devolver",
+  verifyToken,
+  isBibliotecario,
+  registerReturnHandler,
+);
+router.get("/:id", verifyToken, isBibliotecario, getLoanHandler); // siempre al final
+
+module.exports = router;

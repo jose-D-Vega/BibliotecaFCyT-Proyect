@@ -254,4 +254,147 @@ const getAllActiveLoans = async () => {
   return rows
 }
 
-module.exports = { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial, countHistorial }
+const getPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta, id_bibliotecario, limit, offset }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (search) {
+    whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+  if (id_bibliotecario) {
+    whereClause += ` AND d.id_bibliotecario = $${paramIndex}`
+    values.push(id_bibliotecario)
+    paramIndex++
+  }
+
+  values.push(limit)
+  values.push(offset)
+
+  const { rows } = await pool.query(
+    `SELECT
+      p.id_prestamo,
+      p.id_prestamo_original,
+      p.numero_renovacion,
+      p.fecha_activacion,
+      p.fecha_tope_devolucion,
+      p.fecha_respuesta,
+      p.estado_prestamo,
+      p.es_reserva,
+      u.id_usuario,
+      u.nombre_apellido,
+      u.correo,
+      u.ci,
+      ba.nombre_apellido AS bibliotecario_activacion,
+      COUNT(DISTINCT dp.id_ejemplar) AS total_ejemplares,
+      COUNT(DISTINCT l.id_libro) AS total_libros,
+      COUNT(DISTINCT d.id_ejemplar) AS ejemplares_devueltos,
+      BOOL_OR(d.estado_devuelto != 'bueno') AS tiene_problemas,
+      MAX(d.fecha_devolucion) AS ultima_devolucion
+    FROM prestamos p
+    JOIN usuarios u ON p.id_usuario = u.id_usuario
+    JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+    JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+    JOIN libros l ON e.id_libro = l.id_libro
+    JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+    LEFT JOIN usuarios ba ON p.id_bibliotecario = ba.id_usuario
+    ${whereClause}
+    GROUP BY p.id_prestamo, u.id_usuario, ba.nombre_apellido
+    ORDER BY MAX(d.fecha_devolucion) DESC
+    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
+  return rows
+}
+
+const countPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta, id_bibliotecario }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (search) {
+    whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+  if (id_bibliotecario) {
+    whereClause += ` AND d.id_bibliotecario = $${paramIndex}`
+    values.push(id_bibliotecario)
+    paramIndex++
+  }
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(DISTINCT p.id_prestamo)
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+     ${whereClause}`,
+    values
+  )
+  return parseInt(rows[0].count)
+}
+
+const getDetalleDevoluciones = async (id_prestamo) => {
+  const { rows: detalles } = await pool.query(
+    `SELECT
+       d.id_devolucion,
+       d.id_ejemplar,
+       d.fecha_devolucion,
+       d.estado_devuelto,
+       d.observaciones,
+       l.titulo,
+       l.autor,
+       b.nombre_apellido AS bibliotecario
+     FROM devoluciones d
+     JOIN ejemplares e ON d.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     JOIN usuarios b ON d.id_bibliotecario = b.id_usuario
+     WHERE d.id_prestamo = $1
+     ORDER BY d.fecha_devolucion ASC`,
+    [id_prestamo]
+  )
+
+  // Ejemplares aún no devueltos
+  const { rows: pendientes } = await pool.query(
+    `SELECT
+       dp.id_ejemplar,
+       l.titulo,
+       l.autor
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     WHERE dp.id_prestamo = $1
+       AND dp.estado_prestamo_ejemplar = 'activo'`,
+    [id_prestamo]
+  )
+
+  return { devueltos: detalles, pendientes }
+}
+
+module.exports = {
+  searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn,
+  getHistorial, countHistorial,
+  getPrestamosConDevoluciones, countPrestamosConDevoluciones, getDetalleDevoluciones
+}
