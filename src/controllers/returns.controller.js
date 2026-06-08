@@ -1,6 +1,6 @@
 const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial,
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
-   getDetalleDevoluciones } = require('../queries/returns.queries')
+   getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario } = require('../queries/returns.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
   try {
@@ -131,6 +131,31 @@ const getDetalleDevolucionesHandler = async (req, res) => {
   }
 }
 
+const getDevolucionesUsuarioHandler = async (req, res) => {
+  try {
+    const id_usuario = req.user.id_usuario
+    const { search, fecha_desde, fecha_hasta, page = 1, limit = 12 } = req.query
+    const parsedLimit = parseInt(limit)
+    const parsedPage = parseInt(page)
+    const offset = (parsedPage - 1) * parsedLimit
+    const filters = { id_usuario, search, fecha_desde, fecha_hasta, limit: parsedLimit, offset }
+
+    const [devoluciones, total] = await Promise.all([
+      getDevolucionesUsuario(filters),
+      countDevolucionesUsuario(filters)
+    ])
+
+    res.json({
+      data: devoluciones,
+      pagination: { total, page: parsedPage, limit: parsedLimit, totalPages: Math.ceil(total / parsedLimit) }
+    })
+  } catch (error) {
+    console.error('Error al obtener devoluciones del usuario:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = { searchLoansHandler, getAllActiveLoansHandler, 
   getLoanHandler, registerReturnHandler, 
-  getHistorialHandler, getPrestamosConDevolucionesHandler, getDetalleDevolucionesHandler }
+  getHistorialHandler, getPrestamosConDevolucionesHandler, 
+  getDetalleDevolucionesHandler, getDevolucionesUsuarioHandler }

@@ -393,8 +393,99 @@ const getDetalleDevoluciones = async (id_prestamo) => {
   return { devueltos: detalles, pendientes }
 }
 
+const getDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_hasta, limit, offset }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = `WHERE p.id_usuario = $${paramIndex}`
+  values.push(id_usuario)
+  paramIndex++
+
+  if (search) {
+    whereClause += ` AND l.titulo ILIKE $${paramIndex}`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+
+  values.push(limit)
+  values.push(offset)
+
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.id_prestamo_original,
+       p.numero_renovacion,
+       p.fecha_activacion,
+       p.fecha_tope_devolucion,
+       p.estado_prestamo,
+       p.es_reserva,
+       COUNT(DISTINCT dp.id_ejemplar) AS total_ejemplares,
+       COUNT(DISTINCT l.id_libro) AS total_libros,
+       COUNT(DISTINCT d.id_ejemplar) AS ejemplares_devueltos,
+       BOOL_OR(d.estado_devuelto != 'bueno') AS tiene_problemas,
+       MAX(d.fecha_devolucion) AS ultima_devolucion
+     FROM prestamos p
+     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+     ${whereClause}
+     GROUP BY p.id_prestamo
+     ORDER BY MAX(d.fecha_devolucion) DESC
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
+  return rows
+}
+
+const countDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_hasta }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = `WHERE p.id_usuario = $${paramIndex}`
+  values.push(id_usuario)
+  paramIndex++
+
+  if (search) {
+    whereClause += ` AND l.titulo ILIKE $${paramIndex}`
+    values.push(`%${search}%`)
+    paramIndex++
+  }
+  if (fecha_desde) {
+    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(DISTINCT p.id_prestamo)
+     FROM prestamos p
+     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+     ${whereClause}`,
+    values
+  )
+  return parseInt(rows[0].count)
+}
+
 module.exports = {
   searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn,
   getHistorial, countHistorial,
-  getPrestamosConDevoluciones, countPrestamosConDevoluciones, getDetalleDevoluciones
+  getPrestamosConDevoluciones, countPrestamosConDevoluciones, getDetalleDevoluciones,
+  getDevolucionesUsuario, countDevolucionesUsuario
 }

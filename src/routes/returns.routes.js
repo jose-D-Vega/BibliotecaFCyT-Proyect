@@ -8,9 +8,14 @@ const {
   getHistorialHandler,
   getPrestamosConDevolucionesHandler,
   getDetalleDevolucionesHandler,
+  getDevolucionesUsuarioHandler
 } = require("../controllers/returns.controller");
 const { verifyToken } = require("../middlewares/auth");
 const { isBibliotecario } = require("../middlewares/roles");
+
+
+
+router.get('/mis-devoluciones', verifyToken, getDevolucionesUsuarioHandler);
 
 // Solo bibliotecario y admin
 
@@ -37,6 +42,7 @@ router.post(
   isBibliotecario,
   registerReturnHandler,
 );
+
 router.get("/:id", verifyToken, isBibliotecario, getLoanHandler); // siempre al final
 
 module.exports = router;
