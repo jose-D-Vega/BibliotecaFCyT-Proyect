@@ -1,6 +1,6 @@
 const {
   getAllUsers, countUsers, getUserById, updateUser,
-  updateUserRol, updateUserActivo, getTiposUsuario, updateUserCi
+  updateUserRol, updateUserActivo, getTiposUsuario, updateUserTelefono
 } = require('../queries/users.queries')
 const { registrarActividad } = require('../queries/activity.queries')
 
@@ -41,7 +41,6 @@ const getUser = async (req, res) => {
     const { id } = req.params
     const solicitante = req.user
 
-    // Bibliotecario y normal solo pueden ver su propio perfil
     if (['normal', 'bibliotecario'].includes(solicitante.rol) &&
         solicitante.id_usuario !== parseInt(id)) {
       return res.status(403).json({ error: 'No tenés permiso para ver este perfil' })
@@ -57,7 +56,7 @@ const getUser = async (req, res) => {
   }
 }
 
-// Usuario normal y bibliotecario — actualizar ci (solo si está en 'pendiente') y telefono
+// Usuario normal y bibliotecario — actualizar su propio perfil
 const updateOwnProfile = async (req, res) => {
   try {
     const id_usuario = req.user.id_usuario
@@ -66,7 +65,6 @@ const updateOwnProfile = async (req, res) => {
     const current = await getUserById(id_usuario)
     if (!current) return res.status(404).json({ error: 'Usuario no encontrado' })
 
-    // Si ci viene en el body pero ya fue registrado, bloquearlo
     if (ci !== undefined && current.ci !== 'pendiente') {
       return res.status(400).json({ error: 'La cédula ya fue registrada. Contactá al administrador para modificarla' })
     }
@@ -149,30 +147,30 @@ const toggleUserActivo = async (req, res) => {
   }
 }
 
-// Admin — actualizar CI de un usuario
-const updateCiHandler = async (req, res) => {
+// Admin — actualizar teléfono de cualquier usuario por ID
+const changeUserTelefono = async (req, res) => {
   try {
     const { id } = req.params
-    const { ci } = req.body
+    const { telefono } = req.body
 
-    if (!ci) return res.status(400).json({ error: 'El campo ci es requerido' })
+    if (!telefono) return res.status(400).json({ error: 'El campo telefono es requerido' })
 
     const target = await getUserById(id)
     if (!target) return res.status(404).json({ error: 'Usuario no encontrado' })
 
-    const user = await updateUserCi(id, ci)
+    const user = await updateUserTelefono(id, telefono)
 
     registrarActividad({
       id_usuario: req.user.id_usuario,
       tipo_accion: 'editar',
       entidad: 'usuarios',
       id_entidad: parseInt(id),
-      descripcion: `El admin actualizó la cédula de "${target.nombre_apellido}"`
+      descripcion: `El admin actualizó el teléfono de "${target.nombre_apellido}" a: ${telefono}`
     }).catch(err => console.error('Error al registrar actividad:', err))
 
-    res.json({ message: 'Cédula actualizada exitosamente', data: user })
+    res.json({ message: 'Teléfono actualizado exitosamente', data: user })
   } catch (error) {
-    console.error('Error al actualizar cédula:', error)
+    console.error('Error al actualizar teléfono:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
@@ -189,7 +187,6 @@ const deleteUserHandler = async (req, res) => {
       return res.status(400).json({ error: 'El usuario ya se encuentra inactivo' })
     }
 
-    // Reutilizamos updateUserActivo en lugar de una query separada
     const user = await updateUserActivo(id, false)
 
     registrarActividad({
@@ -220,5 +217,5 @@ const getTipos = async (req, res) => {
 
 module.exports = {
   getUsers, getUser, updateOwnProfile, changeUserRol,
-  toggleUserActivo, getTipos, updateCiHandler, deleteUserHandler
+  toggleUserActivo, getTipos, changeUserTelefono, deleteUserHandler
 }
