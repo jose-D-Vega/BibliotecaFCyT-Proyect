@@ -1,15 +1,24 @@
 const isAdmin = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' })
-  if (req.user.rol !== 'admin') {
-    return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de admin' })
+  
+  // Convertimos a minúsculas para evitar problemas de escritura
+  const userRol = req.user.rol ? req.user.rol.toLowerCase() : ''
+  
+  // ¡AQUÍ ESTÁ EL CAMBIO! Permitimos el paso si es 'admin' O si es 'bibliotecario'
+  if (userRol === 'admin' || userRol === 'bibliotecario') {
+    return next() // Deja pasar a la query
   }
-  next()
+  
+  return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de admin o bibliotecario' })
 }
 
 const isBibliotecario = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' })
-  if (!['bibliotecario', 'admin'].includes(req.user.rol)) {
-    return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de bibliotecario o admin' })
+  
+  const userRol = req.user.rol ? req.user.rol.toLowerCase() : ''
+  
+  if (!['bibliotecario', 'admin'].includes(userRol)) {
+    return res.status(403).json({ error: 'Acceso denegado.' })
   }
   next()
 }

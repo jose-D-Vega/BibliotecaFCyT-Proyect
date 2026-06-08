@@ -7,8 +7,11 @@ const {
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin } = require('../middlewares/roles')
 
-// Cualquier usuario autenticado
+// IMPORTANTÍSIMO: /tipos debe ir ANTES de cualquier ruta con /:id
+// Cualquier usuario autenticado puede ver los tipos de roles
 router.get('/tipos', verifyToken, getTipos)
+
+// Rutas de perfil propio o individual
 router.get('/:id', verifyToken, getUser)
 router.put('/me', verifyToken, updateOwnProfile)
 

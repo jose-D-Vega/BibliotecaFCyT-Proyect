@@ -14,6 +14,7 @@ const sessionRoutes = require('./routes/session.routes')
 const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
 
+
 const app = express()
 
 // Middlewares globales
