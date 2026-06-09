@@ -353,6 +353,14 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
       [id_prestamo]
     )
 
+    await client.query(
+      `UPDATE detalles_prestamos
+      SET estado_prestamo_ejemplar = 'cancelado'
+      WHERE id_prestamo = $1
+        AND estado_prestamo_ejemplar IN ('solicitado', 'aprobado')`,
+      [id_prestamo]
+    )
+
     await client.query('COMMIT')
     return cancelado[0]
   } catch (error) {
@@ -364,6 +372,7 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
 }
 
 // Listar préstamos con filtros
+
 
 const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta, limit, offset }) => {
   const values = []
@@ -404,10 +413,26 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
        p.*,
        u.nombre_apellido,
        u.correo,
+       COALESCE(
+         JSON_AGG(
+           JSON_BUILD_OBJECT(
+             'id_ejemplar', dp.id_ejemplar,
+             'estado_prestamo_ejemplar', dp.estado_prestamo_ejemplar,
+             'observaciones', dp.observaciones,
+             'es_reserva', dp.es_reserva,
+             'estado_ejemplar', e.estado_ejemplar,
+             'titulo', l.titulo,
+             'autor', l.autor
+           ) ORDER BY dp.id_ejemplar
+         ) FILTER (WHERE dp.id_ejemplar IS NOT NULL),
+         '[]'
+       ) AS detalles,
        COUNT(dp.id_ejemplar) AS total_ejemplares
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      LEFT JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     LEFT JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     LEFT JOIN libros l ON e.id_libro = l.id_libro
      ${whereClause}
      GROUP BY p.id_prestamo, u.nombre_apellido, u.correo
      ORDER BY p.fecha_solicitud DESC
