@@ -3,7 +3,8 @@ const router = Router()
 const {
   createSanctionHandler, confirmSanctionHandler, rejectSanctionHandler,
   getSanctionsHandler, getSanctionHandler,
-  resolveSanctionHandler, escalateSanctionHandler, getMySanctionsHandler
+  resolveSanctionHandler, escalateSanctionHandler, getMySanctionsHandler,
+  getSanctionsGroupedHandler, getSanctionsByLoanHandler
 } = require('../controllers/sanctions.controller')
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin, isBibliotecario } = require('../middlewares/roles')
@@ -12,6 +13,8 @@ const { isAdmin, isBibliotecario } = require('../middlewares/roles')
 router.get('/mis-sanciones', verifyToken, getMySanctionsHandler)
 
 // Admin y bibliotecario — consultar
+router.get('/agrupadas', verifyToken, isAdmin, getSanctionsGroupedHandler)
+router.get('/prestamo/:id_prestamo', verifyToken, isAdmin, getSanctionsByLoanHandler)
 router.get('/', verifyToken, isBibliotecario, getSanctionsHandler)
 router.get('/:id', verifyToken, isBibliotecario, getSanctionHandler)
 

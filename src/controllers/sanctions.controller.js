@@ -3,7 +3,8 @@ const { crearNotificacion } = require('../queries/notifications.queries')
 const {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
-  resolveSanction, escalateSanction, getMySanctions
+  resolveSanction, escalateSanction, getMySanctions, 
+  getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan
 } = require('../queries/sanctions.queries')
 
 const confirmSanctionHandler = async (req, res) => {
@@ -177,8 +178,42 @@ const getMySanctionsHandler = async (req, res) => {
   }
 }
 
+const getSanctionsGroupedHandler = async (req, res) => {
+  try {
+    const { estado, page = 1, limit = 12 } = req.query
+    const parsedLimit = parseInt(limit)
+    const parsedPage = parseInt(page)
+    const offset = (parsedPage - 1) * parsedLimit
+
+    const [sanciones, total] = await Promise.all([
+      getSanctionsGroupedByLoan({ estado, limit: parsedLimit, offset }),
+      countSanctionsGrouped({ estado })
+    ])
+
+    res.json({
+      data: sanciones,
+      pagination: { total, page: parsedPage, limit: parsedLimit, totalPages: Math.ceil(total / parsedLimit) }
+    })
+  } catch (error) {
+    console.error('Error al obtener sanciones agrupadas:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const getSanctionsByLoanHandler = async (req, res) => {
+  try {
+    const { id_prestamo } = req.params
+    const sanciones = await getSanctionsByLoan(id_prestamo)
+    res.json({ data: sanciones })
+  } catch (error) {
+    console.error('Error al obtener sanciones del préstamo:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = {
   createSanctionHandler, confirmSanctionHandler, rejectSanctionHandler,
-  getSanctionsHandler, getSanctionHandler,
-  resolveSanctionHandler, escalateSanctionHandler, getMySanctionsHandler
+  getSanctionsHandler, getSanctionsGroupedHandler, getSanctionHandler,
+  getSanctionsByLoanHandler, resolveSanctionHandler,
+  escalateSanctionHandler, getMySanctionsHandler
 }

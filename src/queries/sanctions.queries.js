@@ -353,9 +353,103 @@ const getMySanctions = async (id_usuario) => {
   return rows
 }
 
+const getSanctionsGroupedByLoan = async ({ estado, limit, offset }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (estado) {
+    const estados = estado.split(',')
+    whereClause += ` AND s.estado_sancion = ANY($${paramIndex}::varchar[])`
+    values.push(estados)
+    paramIndex++
+  }
+
+  values.push(limit)
+  values.push(offset)
+
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.fecha_tope_devolucion,
+       p.estado_prestamo,
+       u.id_usuario,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo AS usuario_correo,
+       u.ci AS usuario_ci,
+       COUNT(s.id_sancion) AS total_sanciones,
+       -- Si alguna está activa el grupo está activo
+       BOOL_OR(s.estado_sancion = 'activa') AS tiene_activas,
+       BOOL_OR(s.estado_sancion = 'escalada') AS tiene_escaladas,
+       MIN(s.fecha_sancion) AS fecha_primera_sancion,
+       MAX(s.fecha_limite) AS fecha_limite_maxima,
+       -- Agrupar tipos únicos
+       ARRAY_AGG(DISTINCT s.tipo_infraccion) AS tipos,
+       -- ID del admin si hay uno
+       MAX(a.nombre_apellido) AS admin_nombre
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN prestamos p ON s.id_prestamo = p.id_prestamo
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     ${whereClause}
+     GROUP BY p.id_prestamo, u.id_usuario, u.nombre_apellido, u.correo, u.ci
+     ORDER BY MIN(s.fecha_sancion) DESC
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
+  return rows
+}
+
+const countSanctionsGrouped = async ({ estado }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = 'WHERE 1=1'
+
+  if (estado) {
+    const estados = estado.split(',')
+    whereClause += ` AND s.estado_sancion = ANY($${paramIndex}::varchar[])`
+    values.push(estados)
+    paramIndex++
+  }
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(DISTINCT COALESCE(s.id_prestamo::text, s.id_usuario::text || '-' || s.id_sancion::text))
+     FROM sanciones s
+     ${whereClause}`,
+    values
+  )
+  return parseInt(rows[0].count)
+}
+
+// Detalle de todas las sanciones de un préstamo
+const getSanctionsByLoan = async (id_prestamo) => {
+  const { rows } = await pool.query(
+    `SELECT
+       s.*,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo AS usuario_correo,
+       u.ci AS usuario_ci,
+       a.nombre_apellido AS admin_nombre,
+       l.titulo AS libro_titulo,
+       l.autor AS libro_autor,
+       e.id_ejemplar
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
+     LEFT JOIN libros l ON e.id_libro = l.id_libro
+     WHERE s.id_prestamo = $1
+     ORDER BY s.fecha_sancion ASC`,
+    [id_prestamo]
+  )
+  return rows
+}
+
+
 module.exports = {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
+  getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
   resolveSanction, escalateSanction,
   autoResolveFaltaEntrega, getMySanctions
 }
