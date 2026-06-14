@@ -1,4 +1,5 @@
 const pool = require('../config/db')
+const { autoResolveFaltaEntrega } = require('./sanctions.queries')
 
 // Buscar préstamos activos por datos del usuario
 const searchActiveLoans = async (search) => {
@@ -47,7 +48,7 @@ const getLoanForReturn = async (id_prestamo) => {
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      WHERE p.id_prestamo = $1
-       AND p.estado_prestamo IN ('activo', 'pendiente_devolucion')`,
+       AND p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido')`,
     [id_prestamo]
   )
 
@@ -116,13 +117,15 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
 
     const quedanPendientes = parseInt(pendientes[0].count) > 0
 
-    // Si no quedan pendientes, cerrar el préstamo
+    // "Si no quedan pendientes, cerrar el préstamo"
     if (!quedanPendientes) {
       await client.query(
         `UPDATE prestamos SET estado_prestamo = 'devuelto'
-         WHERE id_prestamo = $1`,
+        WHERE id_prestamo = $1`,
         [id_prestamo]
       )
+      // Resolver automáticamente falta_entrega si existía
+      await autoResolveFaltaEntrega(id_prestamo, client)
     }
 
     await client.query('COMMIT')
@@ -244,7 +247,7 @@ const getAllActiveLoans = async () => {
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
-     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion')
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido') -- ← agregar vencido
      GROUP BY p.id_prestamo, u.id_usuario
      HAVING COUNT(dp.id_ejemplar) FILTER (
        WHERE dp.estado_prestamo_ejemplar = 'activo'
