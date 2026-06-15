@@ -446,10 +446,112 @@ const getSanctionsByLoan = async (id_prestamo) => {
 }
 
 
+// Buscar préstamos a sancionar.
+// tipo = 'falta_entrega' -> solo préstamos 'vencido' sin sanción falta_entrega
+//        activa/pendiente_confirmacion ya registrada.
+// tipo = otro            -> préstamos activo, pendiente_devolucion, vencido o
+//        devuelto que coincidan con la búsqueda, con al menos un ejemplar.
+const searchSanctionableLoans = async (search, tipo) => {
+  if (tipo === 'falta_entrega') {
+    const { rows } = await pool.query(
+      `SELECT
+         p.id_prestamo,
+         p.fecha_solicitud,
+         p.fecha_tope_devolucion,
+         p.estado_prestamo,
+         u.id_usuario,
+         u.nombre_apellido,
+         u.correo,
+         u.ci
+       FROM prestamos p
+       JOIN usuarios u ON p.id_usuario = u.id_usuario
+       WHERE p.estado_prestamo = 'vencido'
+         AND (
+           u.nombre_apellido ILIKE $1 OR
+           u.correo ILIKE $1 OR
+           u.ci ILIKE $1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM sanciones s
+           WHERE s.id_prestamo = p.id_prestamo
+             AND s.tipo_infraccion = 'falta_entrega'
+             AND s.estado_sancion IN ('activa', 'pendiente_confirmacion')
+         )
+       ORDER BY p.fecha_tope_devolucion ASC`,
+      [`%${search}%`]
+    )
+    return rows
+  }
+
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.fecha_solicitud,
+       p.fecha_tope_devolucion,
+       p.estado_prestamo,
+       u.id_usuario,
+       u.nombre_apellido,
+       u.correo,
+       u.ci,
+       COUNT(dp.id_ejemplar) AS total_ejemplares
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido', 'devuelto')
+       AND (
+         u.nombre_apellido ILIKE $1 OR
+         u.correo ILIKE $1 OR
+         u.ci ILIKE $1
+       )
+     GROUP BY p.id_prestamo, u.id_usuario
+     HAVING COUNT(dp.id_ejemplar) > 0
+     ORDER BY p.fecha_tope_devolucion DESC`,
+    [`%${search}%`]
+  )
+  return rows
+}
+
+// Préstamo con todos sus ejemplares — para elegir cuáles sancionar
+// (incluye estado_prestamo_ejemplar para mostrar contexto al admin)
+const getLoanWithEjemplaresForSanction = async (id_prestamo) => {
+  const { rows: prestamo } = await pool.query(
+    `SELECT
+       p.*,
+       u.nombre_apellido,
+       u.correo,
+       u.ci
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     WHERE p.id_prestamo = $1`,
+    [id_prestamo]
+  )
+
+  if (prestamo.length === 0) return null
+
+  const { rows: ejemplares } = await pool.query(
+    `SELECT
+       dp.id_ejemplar,
+       dp.estado_prestamo_ejemplar,
+       e.estado_ejemplar,
+       l.id_libro,
+       l.titulo,
+       l.autor
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     WHERE dp.id_prestamo = $1
+     ORDER BY dp.id_ejemplar ASC`,
+    [id_prestamo]
+  )
+
+  return { ...prestamo[0], ejemplares }
+}
+
 module.exports = {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
   getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
   resolveSanction, escalateSanction,
-  autoResolveFaltaEntrega, getMySanctions
+  autoResolveFaltaEntrega, getMySanctions,
+  searchSanctionableLoans, getLoanWithEjemplaresForSanction
 }

@@ -1,6 +1,7 @@
 const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial,
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
-   getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario } = require('../queries/returns.queries')
+   getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario,
+  reassignReservation } = require('../queries/returns.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
   try {
@@ -42,10 +43,9 @@ const registerReturnHandler = async (req, res) => {
   try {
     const { id } = req.params
     const { devoluciones } = req.body
-    const id_bibliotecario = req.user.id_usuario
 
-    if (!devoluciones || devoluciones.length === 0) {
-      return res.status(400).json({ error: 'Seleccioná al menos un ejemplar para devolver' })
+    if (!Array.isArray(devoluciones) || devoluciones.length === 0) {
+      return res.status(400).json({ error: 'Debe especificar al menos un ejemplar a devolver' })
     }
 
     // Validar que cada devolución tenga los campos necesarios
@@ -61,15 +61,47 @@ const registerReturnHandler = async (req, res) => {
       }
     }
 
-    const result = await registerReturn(id, id_bibliotecario, devoluciones)
-    res.json({
-      message: result.prestamo_cerrado
-        ? 'Todos los ejemplares fueron devueltos. Préstamo cerrado.'
-        : `${result.devueltos} ejemplar${result.devueltos > 1 ? 'es' : ''} registrado${result.devueltos > 1 ? 's' : ''}. Quedan ${result.ejemplares_pendientes} pendiente${result.ejemplares_pendientes > 1 ? 's' : ''}.`,
-      data: result
-    })
+    const resultado = await registerReturn(id, req.user.id_usuario, devoluciones)
+
+    let mensaje = 'Devolución registrada exitosamente'
+    if (resultado.reservas_afectadas.length > 0) {
+      mensaje += '. Hay reservas afectadas por ejemplares dañados/perdidos que requieren tu confirmación.'
+    }
+
+
+    res.json({ message: mensaje, data: resultado })
   } catch (error) {
     console.error('Error al registrar devolución:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+// Confirmar (o rechazar) la reasignación de un ejemplar sustituto a una reserva
+// cuyo ejemplar original volvió dañado/perdido
+const resolveReservaAfectadaHandler = async (req, res) => {
+  try {
+    const { id_prestamo, id_ejemplar_anterior } = req.params
+    const { id_ejemplar_nuevo, accion } = req.body // accion: 'reasignar' | 'descartar'
+
+    if (!['reasignar', 'descartar'].includes(accion)) {
+      return res.status(400).json({ error: 'Acción inválida' })
+    }
+
+    if (accion === 'descartar') {
+      // El bibliotecario decide no reasignar automáticamente; queda pendiente de gestión manual
+      return res.json({ message: 'Reasignación descartada. Gestioná la reserva manualmente.' })
+    }
+
+    if (!id_ejemplar_nuevo) {
+      return res.status(400).json({ error: 'Debe indicar el ejemplar sustituto' })
+    }
+
+    const resultado = await reassignReservation(id_prestamo, id_ejemplar_anterior, id_ejemplar_nuevo)
+    if (resultado.error) return res.status(409).json({ error: resultado.error })
+
+    res.json({ message: 'Reserva reasignada al ejemplar sustituto', data: resultado })
+  } catch (error) {
+    console.error('Error al reasignar reserva:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
@@ -158,4 +190,5 @@ const getDevolucionesUsuarioHandler = async (req, res) => {
 module.exports = { searchLoansHandler, getAllActiveLoansHandler, 
   getLoanHandler, registerReturnHandler, 
   getHistorialHandler, getPrestamosConDevolucionesHandler, 
-  getDetalleDevolucionesHandler, getDevolucionesUsuarioHandler }
+  getDetalleDevolucionesHandler, getDevolucionesUsuarioHandler,
+  resolveReservaAfectadaHandler }

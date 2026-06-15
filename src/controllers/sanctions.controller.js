@@ -4,7 +4,8 @@ const {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
   resolveSanction, escalateSanction, getMySanctions, 
-  getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan
+  getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
+  searchSanctionableLoans, getLoanWithEjemplaresForSanction
 } = require('../queries/sanctions.queries')
 
 const confirmSanctionHandler = async (req, res) => {
@@ -49,6 +50,21 @@ const rejectSanctionHandler = async (req, res) => {
   }
 }
 
+const TIPOS_VALIDOS = ['falta_entrega', 'devolucion_tardia', 'deterioro', 'perdida', 'comportamiento']
+
+// Genera una descripción sugerida para sanciones de tipo falta_entrega,
+// basada en la fecha tope del préstamo y la fecha actual
+const generarDescripcionFaltaEntrega = (fecha_tope_devolucion) => {
+  const hoy = new Date()
+  hoy.setHours(0, 0, 0, 0)
+  const fechaTope = new Date(fecha_tope_devolucion)
+  fechaTope.setHours(0, 0, 0, 0)
+  const diasVencido = Math.max(0, Math.round((hoy - fechaTope) / (1000 * 60 * 60 * 24)))
+
+  const fechaTopeStr = fechaTope.toLocaleDateString('es-PY')
+  return `El usuario no devolvió el material en la fecha tope establecida (${fechaTopeStr}), acumulando ${diasVencido} día${diasVencido === 1 ? '' : 's'} de atraso sin presentarse a regularizar su situación.`
+}
+
 const createSanctionHandler = async (req, res) => {
   try {
     const {
@@ -57,28 +73,52 @@ const createSanctionHandler = async (req, res) => {
       fecha_limite, dias_suspension
     } = req.body
 
-    if (!id_prestamo || !id_ejemplar || !id_usuario || !tipo_infraccion || !descripcion_sancion) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios' })
-    }
-
-    const tiposValidos = ['devolucion_tardia', 'deterioro', 'perdida', 'comportamiento']
-    if (!tiposValidos.includes(tipo_infraccion)) {
+    if (!tipo_infraccion || !TIPOS_VALIDOS.includes(tipo_infraccion)) {
       return res.status(400).json({ error: 'Tipo de infracción inválido' })
     }
 
-    if (tipo_infraccion === 'comportamiento' && !dias_suspension) {
-      return res.status(400).json({ error: 'Debe especificar los días de suspensión' })
+    if (!id_usuario) {
+      return res.status(400).json({ error: 'El campo id_usuario es obligatorio' })
     }
 
+    // id_prestamo es obligatorio para todos menos comportamiento
+    if (tipo_infraccion !== 'comportamiento' && !id_prestamo) {
+      return res.status(400).json({ error: 'El campo id_prestamo es obligatorio para este tipo de infracción' })
+    }
+
+    // id_ejemplar es obligatorio para devolucion_tardia, deterioro y perdida
+    if (['devolucion_tardia', 'deterioro', 'perdida'].includes(tipo_infraccion) && !id_ejemplar) {
+      return res.status(400).json({ error: 'El campo id_ejemplar es obligatorio para este tipo de infracción' })
+    }
+
+    // descripción obligatoria para todos menos falta_entrega (se autogenera)
+    let descripcionFinal = descripcion_sancion?.trim() || ''
+    if (!descripcionFinal && tipo_infraccion !== 'falta_entrega') {
+      return res.status(400).json({ error: 'El campo descripcion_sancion es obligatorio' })
+    }
+
+    if (tipo_infraccion === 'falta_entrega' && !descripcionFinal) {
+      const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo)
+      if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' })
+      descripcionFinal = generarDescripcionFaltaEntrega(prestamo.fecha_tope_devolucion)
+    }
+
+    // dias_suspension: para devolucion_tardia se calcula solo en la query (10 días fijos).
+    // Para comportamiento, si no viene, queda indefinida (sin fecha_fin_suspension)
     const sancion = await createSanction({
-      id_prestamo, id_ejemplar, id_usuario,
+      id_prestamo: id_prestamo || null,
+      id_ejemplar: id_ejemplar || null,
+      id_usuario,
       id_admin: req.user.id_usuario,
-      tipo_infraccion, descripcion_sancion,
-      fecha_limite, dias_suspension
+      tipo_infraccion,
+      descripcion_sancion: descripcionFinal,
+      fecha_limite,
+      dias_suspension: dias_suspension || null
     })
 
     // Notificar al usuario
     const tipoLabel = {
+      falta_entrega: 'falta de entrega de material',
       devolucion_tardia: 'devolución tardía',
       deterioro: 'deterioro de material',
       perdida: 'pérdida de material',
@@ -89,8 +129,8 @@ const createSanctionHandler = async (req, res) => {
       id_usuario,
       tipo: 'prestamo_vencido',
       titulo: 'Has recibido una sanción',
-      mensaje: `Se registró una sanción por ${tipoLabel[tipo_infraccion]}. ${descripcion_sancion}`,
-      id_prestamo
+      mensaje: `Se registró una sanción por ${tipoLabel[tipo_infraccion]}. ${descripcionFinal}`,
+      id_prestamo: id_prestamo || null
     })
 
     res.status(201).json({ message: 'Sanción registrada exitosamente', data: sancion })
@@ -211,9 +251,43 @@ const getSanctionsByLoanHandler = async (req, res) => {
   }
 }
 
+// Buscar préstamos sancionables por nombre, correo o ci del usuario
+// ?search=texto&tipo=falta_entrega|otro
+const searchSanctionableLoansHandler = async (req, res) => {
+  try {
+    const { search, tipo } = req.query
+    if (!search || !search.trim()) {
+      return res.status(400).json({ error: 'Ingresá un término de búsqueda' })
+    }
+    if (!tipo || !TIPOS_VALIDOS.includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo de infracción inválido' })
+    }
+
+    const prestamos = await searchSanctionableLoans(search.trim(), tipo)
+    res.json({ data: prestamos })
+  } catch (error) {
+    console.error('Error al buscar préstamos sancionables:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+// Obtener un préstamo con todos sus ejemplares — para elegir cuáles sancionar
+const getLoanForSanctionHandler = async (req, res) => {
+  try {
+    const { id_prestamo } = req.params
+    const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo)
+    if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' })
+    res.json({ data: prestamo })
+  } catch (error) {
+    console.error('Error al obtener préstamo:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = {
   createSanctionHandler, confirmSanctionHandler, rejectSanctionHandler,
   getSanctionsHandler, getSanctionsGroupedHandler, getSanctionHandler,
   getSanctionsByLoanHandler, resolveSanctionHandler,
-  escalateSanctionHandler, getMySanctionsHandler
+  escalateSanctionHandler, getMySanctionsHandler,
+  searchSanctionableLoansHandler, getLoanForSanctionHandler
 }

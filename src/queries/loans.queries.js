@@ -247,7 +247,7 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
 }
 
 // Activar préstamo — usuario retira todos los ejemplares aprobados
-const activateLoan = async (id_prestamo) => {
+const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -278,10 +278,11 @@ const activateLoan = async (id_prestamo) => {
       `UPDATE prestamos
        SET estado_prestamo = 'activo',
            fecha_activacion = NOW(),
-           fecha_tope_devolucion = $1
-       WHERE id_prestamo = $2
+           fecha_tope_devolucion = $1,
+           id_bibliotecario_activacion = $2
+       WHERE id_prestamo = $3
        RETURNING *`,
-      [fechaTope, id_prestamo]
+      [fechaTope, id_bibliotecario_activacion, id_prestamo]
     )
 
     // Actualizar detalles aprobados a activo
@@ -347,9 +348,11 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
     }
 
     const { rows: cancelado } = await client.query(
-      `UPDATE prestamos SET estado_prestamo = 'cancelado'
-       WHERE id_prestamo = $1
-       RETURNING *`,
+      `UPDATE prestamos
+      SET estado_prestamo = 'cancelado',
+          fecha_cancelacion = NOW()
+      WHERE id_prestamo = $1
+      RETURNING *`,
       [id_prestamo]
     )
 
