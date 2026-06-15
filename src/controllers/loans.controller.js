@@ -45,14 +45,20 @@ const createLoanHandler = async (req, res) => {
 const respondLoanDetailHandler = async (req, res) => {
   try {
     const { id, id_ejemplar } = req.params
-    const { estado } = req.body
+    const { estado, observaciones } = req.body
 
     const estadosValidos = ['aprobado', 'rechazado']
     if (!estadosValidos.includes(estado)) {
       return res.status(400).json({ error: 'Estado inválido. Debe ser aprobado o rechazado' })
     }
 
-    const result = await respondLoanDetail(id, id_ejemplar, estado, req.user.id_usuario)
+    const result = await respondLoanDetail(
+      id,
+      id_ejemplar,
+      estado,
+      req.user.id_usuario,
+      observaciones
+    )
 
     if (!result) return res.status(404).json({ error: 'Préstamo o ejemplar no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
@@ -95,6 +101,28 @@ const cancelLoanHandler = async (req, res) => {
   }
 }
 
+const { cancelLoanSmart } = require('../queries/loans.queries')
+
+const cancelLoanSmartHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const id_usuario = req.user.id_usuario
+
+    const result = await cancelLoanSmart(id, id_usuario)
+
+    if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
+    if (result.error) return res.status(400).json({ error: result.error })
+
+    res.json({
+      message: 'Préstamo cancelado correctamente (reversión aplicada)',
+      data: result
+    })
+  } catch (error) {
+    console.error('Error al cancelar préstamo smart:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 const getLoansHandler = async (req, res) => {
   try {
     const { estado, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
@@ -103,7 +131,7 @@ const getLoansHandler = async (req, res) => {
     const offset = (parsedPage - 1) * parsedLimit
 
     // Normal y bibliotecario actuando como usuario solo ven los suyos
-    const id_usuario = ['normal', 'bibliotecario'].includes(req.user.rol)
+    const id_usuario = ['normal'].includes(req.user.rol)
       ? req.user.id_usuario
       : req.query.id_usuario
 
@@ -179,12 +207,52 @@ const renewLoanHandler = async (req, res) => {
   }
 }
 
+const {
+  approveRenewal,
+  rejectRenewal
+} = require('../queries/loans.queries')
+
+const approveRenewalHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const result = await approveRenewal(id)
+
+    res.json({
+      message: "Renovación aprobada",
+      data: result
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: "Error interno" })
+  }
+}
+
+const rejectRenewalHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const result = await rejectRenewal(id)
+
+    res.json({
+      message: "Renovación rechazada",
+      data: result
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: "Error interno" })
+  }
+}
+
 module.exports = {
   createLoanHandler,
   respondLoanDetailHandler,
   activateLoanHandler,
   cancelLoanHandler,
+  cancelLoanSmartHandler,
   getLoansHandler,
   getLoanHandler,
-  renewLoanHandler
+  renewLoanHandler,
+  approveRenewalHandler,
+  rejectRenewalHandler
 }
