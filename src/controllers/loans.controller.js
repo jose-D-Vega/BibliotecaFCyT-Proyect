@@ -73,7 +73,7 @@ const respondLoanDetailHandler = async (req, res) => {
 const activateLoanHandler = async (req, res) => {
   try {
     const { id } = req.params
-    const result = await activateLoan(id)
+    const result = await activateLoan(id, req.user.id_usuario)
 
     if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
@@ -130,10 +130,13 @@ const getLoansHandler = async (req, res) => {
     const parsedPage = parseInt(page)
     const offset = (parsedPage - 1) * parsedLimit
 
-    // Normal y bibliotecario actuando como usuario solo ven los suyos
-    const id_usuario = ['normal'].includes(req.user.rol)
+    // Usar rolActivo en lugar de rol real
+    // Si el rol activo es normal → solo ve los suyos
+    // Si el rol activo es bibliotecario o admin → puede ver todos (o filtrar por id_usuario)
+    const rolActivo = req.user.rolActivo
+    const id_usuario = rolActivo === 'normal'
       ? req.user.id_usuario
-      : req.query.id_usuario
+      : req.query.id_usuario // puede ser undefined para ver todos
 
     const esReservaFilter = es_reserva !== undefined ? es_reserva === 'true' : undefined
     const filters = {

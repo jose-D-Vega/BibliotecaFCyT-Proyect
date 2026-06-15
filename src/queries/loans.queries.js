@@ -248,7 +248,7 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
 }
 
 // Activar préstamo — usuario retira todos los ejemplares aprobados
-const activateLoan = async (id_prestamo) => {
+const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -279,10 +279,11 @@ const activateLoan = async (id_prestamo) => {
       `UPDATE prestamos
        SET estado_prestamo = 'activo',
            fecha_activacion = NOW(),
-           fecha_tope_devolucion = $1
-       WHERE id_prestamo = $2
+           fecha_tope_devolucion = $1,
+           id_bibliotecario_activacion = $2
+       WHERE id_prestamo = $3
        RETURNING *`,
-      [fechaTope, id_prestamo]
+      [fechaTope, id_bibliotecario_activacion, id_prestamo]
     )
 
     // Actualizar detalles aprobados a activo
@@ -348,9 +349,19 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
     }
 
     const { rows: cancelado } = await client.query(
-      `UPDATE prestamos SET estado_prestamo = 'cancelado'
-       WHERE id_prestamo = $1
-       RETURNING *`,
+      `UPDATE prestamos
+      SET estado_prestamo = 'cancelado',
+          fecha_cancelacion = NOW()
+      WHERE id_prestamo = $1
+      RETURNING *`,
+      [id_prestamo]
+    )
+
+    await client.query(
+      `UPDATE detalles_prestamos
+      SET estado_prestamo_ejemplar = 'cancelado'
+      WHERE id_prestamo = $1
+        AND estado_prestamo_ejemplar IN ('solicitado', 'aprobado')`,
       [id_prestamo]
     )
 
@@ -467,6 +478,7 @@ const getLoanMaterials = async (id_prestamo) => {
 
 // Listar préstamos con filtros
 
+
 const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta, limit, offset }) => {
   const values = []
   let paramIndex = 1
@@ -501,58 +513,37 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
   values.push(limit)
   values.push(offset)
 
-await pool.query(`
-  UPDATE prestamos
-  SET estado_prestamo = 'vencido'
-  WHERE estado_prestamo = 'activo'
-    AND fecha_tope_devolucion::date < CURRENT_DATE
-`)
-
-const { rows: prestamos } = await pool.query(
-  `SELECT
-     p.*,
-     d.fecha_devolucion,
-     u.nombre_apellido,
-     u.correo,
-     COUNT(dp.id_ejemplar) AS total_ejemplares
-   FROM prestamos p
-   JOIN usuarios u
-     ON p.id_usuario = u.id_usuario
-   LEFT JOIN detalles_prestamos dp
-     ON p.id_prestamo = dp.id_prestamo
-   LEFT JOIN (
-     SELECT
-       id_prestamo,
-       MAX(fecha_devolucion) AS fecha_devolucion
-     FROM devoluciones
-     GROUP BY id_prestamo
-   ) d
-     ON d.id_prestamo = p.id_prestamo
-   ${whereClause}
-   GROUP BY
-     p.id_prestamo,
-     d.fecha_devolucion,
-     u.nombre_apellido,
-     u.correo
-   ORDER BY p.fecha_solicitud DESC
-   LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-  values
-)
-
-// 🔥 AGREGAR MATERIALS POR CADA PRESTAMO
-const enriched = await Promise.all(
-  prestamos.map(async (p) => {
-    const materiales = await getLoanMaterials(p.id_prestamo)
-
-    return {
-      ...p,
-      materiales,
-      total_materiales: materiales.length
-    }
-  })
-)
-
-return enriched
+  const { rows } = await pool.query(
+    `SELECT
+       p.*,
+       u.nombre_apellido,
+       u.correo,
+       COALESCE(
+         JSON_AGG(
+           JSON_BUILD_OBJECT(
+             'id_ejemplar', dp.id_ejemplar,
+             'estado_prestamo_ejemplar', dp.estado_prestamo_ejemplar,
+             'observaciones', dp.observaciones,
+             'es_reserva', dp.es_reserva,
+             'estado_ejemplar', e.estado_ejemplar,
+             'titulo', l.titulo,
+             'autor', l.autor
+           ) ORDER BY dp.id_ejemplar
+         ) FILTER (WHERE dp.id_ejemplar IS NOT NULL),
+         '[]'
+       ) AS detalles,
+       COUNT(dp.id_ejemplar) AS total_ejemplares
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     LEFT JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     LEFT JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     LEFT JOIN libros l ON e.id_libro = l.id_libro
+     ${whereClause}
+     GROUP BY p.id_prestamo, u.nombre_apellido, u.correo
+     ORDER BY p.fecha_solicitud DESC
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
   return rows
 }
 
