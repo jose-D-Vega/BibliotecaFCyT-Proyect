@@ -183,7 +183,7 @@ DELETE /api/books/:id                       - Eliminar libro                    
 GET    /api/books/:id_libro/copies          - Listar ejemplares de un libro
 GET    /api/books/:id_libro/copies/:id      - Obtener un ejemplar
 POST   /api/books/:id_libro/copies          - Agregar ejemplar                               🔒 bibliotecario / admin
-PATCH  /api/books/:id_libro/copies/:id/estado - Cambiar estado del ejemplar                 🔒 admin
+PATCH  /api/books/:id_libro/copies/:id/estado - Cambiar estado del ejemplar                  🔒 admin
 DELETE /api/books/:id_libro/copies/:id      - Eliminar ejemplar                              🔒 admin
 ```
 
@@ -216,12 +216,12 @@ PATCH  /api/returns/prestamo/:id_prestamo/reserva-afectada/:id_ejemplar_anterior
 
 ### Sanciones
 ```
-GET    /api/sanctions/mis-sanciones                          - Mis sanciones                🔒 Requiere auth
+GET    /api/sanctions/mis-sanciones                          - Mis sanciones                 🔒 Requiere auth
 GET    /api/sanctions/buscar-prestamo                        - Buscar préstamos sancionables 🔒 admin
-GET    /api/sanctions/prestamo/:id_prestamo/ejemplares       - Ejemplares de un préstamo    🔒 admin
+GET    /api/sanctions/prestamo/:id_prestamo/ejemplares       - Ejemplares de un préstamo     🔒 admin
 GET    /api/sanctions/agrupadas                              - Sanciones agrupadas           🔒 admin
-GET    /api/sanctions/prestamo/:id_prestamo                  - Sanciones de un préstamo     🔒 admin
-GET    /api/sanctions                                        - Listar todas las sanciones   🔒 bibliotecario / admin
+GET    /api/sanctions/prestamo/:id_prestamo                  - Sanciones de un préstamo      🔒 admin
+GET    /api/sanctions                                        - Listar todas las sanciones    🔒 bibliotecario / admin
 GET    /api/sanctions/:id                                    - Obtener sanción por ID        🔒 bibliotecario / admin
 POST   /api/sanctions                                        - Crear sanción                 🔒 admin
 PATCH  /api/sanctions/:id/confirmar                          - Confirmar sanción             🔒 admin
@@ -270,16 +270,6 @@ El sistema usa **Google OAuth 2.0** restringido al dominio institucional `@fctun
 Authorization: Bearer <token>
 ```
 
-**Payload del JWT:**
-```json
-{
-  "id_usuario": 1,
-  "correo": "usuario@fctunca.edu.py",
-  "nombre": "Nombre Apellido",
-  "rol": "normal | bibliotecario | admin"
-}
-```
-El token tiene una expiración de **8 horas**.
 
 ### Sistema de Roles
 - **admin** - Acceso total al sistema
@@ -327,15 +317,13 @@ module.exports = pool;
 
 ---
 
-## 📄 Licencia
-
-Este proyecto está bajo la licencia **ISC**.
-
----
-
-## ✨ Autor
+## ✨ Autores
 
 **Equipo de Ingeniería en Informática — Programación Web I**  
+- José Santos David Vega Acosta.
+- Alejandro Manuel Villalba Irigoitia.
+- Carina Velazquez Rodríguez.
+
 *FCyT — Universidad Nacional de Caaguazú*
 
 ---
