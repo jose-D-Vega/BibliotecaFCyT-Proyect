@@ -13,7 +13,7 @@ const activityRoutes = require('./routes/activity.routes')
 const sessionRoutes = require('./routes/session.routes')
 const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
-
+const sancionesRoutes = require('./routes/sansiones.routes')
 
 const app = express()
 
@@ -37,7 +37,7 @@ app.use('/api/activity', activityRoutes)
 app.use('/api/sessions', sessionRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/returns', returnsRoutes)
-
+app.use('/api/sanciones', sancionesRoutes)
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
   res.json({ message: 'API BibliotecaFCyT' })
