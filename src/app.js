@@ -15,6 +15,7 @@ const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
 const sanctionsRoutes = require('./routes/sanctions.routes')
 
+const errorHandler = require('./middlewares/error.middleware');
 
 const app = express()
 
@@ -49,5 +50,7 @@ app.get('/', (req, res) => {
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada' })
 })
+
+app.use(errorHandler);
 
 module.exports = app

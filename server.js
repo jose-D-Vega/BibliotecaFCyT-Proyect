@@ -1,6 +1,6 @@
 require('dotenv').config()
 const app = require('./src/app')
-const { iniciarJob } = require('./src/jobs/loanChecker')
+const { iniciarJob } = require('./src/jobs/loan.checker')
 
 const PORT = process.env.PORT || 3000
 

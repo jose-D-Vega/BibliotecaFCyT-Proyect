@@ -3,9 +3,10 @@ const { getNotificaciones, countNoLeidas, marcarLeida, marcarTodasLeidas } = req
 const getNotificacionesHandler = async (req, res) => {
   try {
     const id_usuario = req.user.id_usuario
+    const rolActivo = req.user.rolActivo || 'normal'
     const [notificaciones, noLeidas] = await Promise.all([
-      getNotificaciones(id_usuario),
-      countNoLeidas(id_usuario)
+      getNotificaciones(id_usuario, rolActivo),
+      countNoLeidas(id_usuario, rolActivo)
     ])
     res.json({ data: notificaciones, no_leidas: noLeidas })
   } catch (error) {

@@ -1,6 +1,7 @@
 const { getAllBooks, countBooks, getBookById, createBook, updateBook, deleteBook } = require('../queries/books.queries')
 const { registrarActividad } = require('../queries/activity.queries')
 const { subirImagen, eliminarImagen } = require('../utils/storage')
+const { isValidId } = require('../utils/validators')
 
 const getBooks = async (req, res) => {
   try {
@@ -33,6 +34,11 @@ const getBooks = async (req, res) => {
 const getBook = async (req, res) => {
   try {
     const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id debe ser un número entero válido' })
+    }
+
     const book = await getBookById(id)
 
     if (!book) return res.status(404).json({ error: 'Libro no encontrado' })
@@ -78,6 +84,11 @@ const createBookHandler = async (req, res) => {
 const updateBookHandler = async (req, res) => {
   try {
     const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id debe ser un número entero válido' })
+    }
+
     let updateData = { ...req.body }
 
     if (req.file) {
@@ -106,6 +117,11 @@ const updateBookHandler = async (req, res) => {
 const deleteBookHandler = async (req, res) => {
   try {
     const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id debe ser un número entero válido' })
+    }
+    
     const result = await deleteBook(id)
 
     if (!result) return res.status(404).json({ error: 'Libro no encontrado' })

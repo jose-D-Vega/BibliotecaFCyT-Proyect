@@ -99,7 +99,7 @@ const getUserById = async (id_usuario) => {
   const { rows } = await pool.query(
     `SELECT
       u.id_usuario,
-      u.nombre_apellido,
+      u.nombre_apellido as nombre,
       u.ci,
       u.telefono,
       u.correo,

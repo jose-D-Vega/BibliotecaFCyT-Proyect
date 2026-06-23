@@ -6,10 +6,14 @@ const {
   updateCopyStatus,
   deleteCopy
 } = require('../queries/copies.queries')
+const { isValidId } = require('../utils/validators')
 
 const getCopies = async (req, res) => {
   try {
     const { id_libro } = req.params
+    if (!isValidId(id_libro)) {
+      return res.status(400).json({ error: 'El id del libro debe ser un número entero válido' })
+    }
     const copies = await getCopiesByBook(id_libro)
     res.json({ data: copies })
   } catch (error) {
@@ -21,6 +25,9 @@ const getCopies = async (req, res) => {
 const getCopy = async (req, res) => {
   try {
     const { id } = req.params
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id del ejemplar debe ser un número entero válido' })
+    }
     const copy = await getCopyById(id)
     if (!copy) return res.status(404).json({ error: 'Ejemplar no encontrado' })
     res.json({ data: copy })
@@ -36,6 +43,9 @@ const addCopy = async (req, res) => {
     const { cantidad } = req.body
 
     let result
+    if (!isValidId(id_libro)) {
+      return res.status(400).json({ error: 'El id del libro debe ser un número entero válido' })
+    }
     if (cantidad && cantidad > 1) {
       if (cantidad > 50) {
         return res.status(400).json({ error: 'No se pueden agregar más de 50 ejemplares a la vez' })
@@ -58,6 +68,9 @@ const addCopy = async (req, res) => {
 const updateStatus = async (req, res) => {
   try {
     const { id } = req.params
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id del ejemplar debe ser un número entero válido' })
+    }
     const { estado_ejemplar } = req.body
 
     if (!estado_ejemplar) {
@@ -85,6 +98,9 @@ const updateStatus = async (req, res) => {
 const removeCopy = async (req, res) => {
   try {
     const { id } = req.params
+    if (!isValidId(id)) {
+      return res.status(400).json({ error: 'El id del ejemplar debe ser un número entero válido' })
+    }
 
     // No permitir dar de baja si está prestado o reservado
     const copy = await getCopyById(id)

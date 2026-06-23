@@ -34,7 +34,8 @@ const verificarPrestamos = async () => {
         tipo: 'renovacion_vencida',
         titulo: 'Renovación sin respuesta',
         mensaje: `Tu solicitud de renovación no fue respondida a tiempo. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros.`,
-        id_prestamo: prestamo.id_prestamo
+        id_prestamo: prestamo.id_prestamo,
+        unica: true
       })
     }
 
@@ -65,7 +66,8 @@ const verificarPrestamos = async () => {
         tipo: 'prestamo_vencido',
         titulo: 'Préstamo vencido',
         mensaje: 'Tu préstamo ha vencido y has recibido una sanción. Acercate a la biblioteca para regularizar tu situación.',
-        id_prestamo: prestamo.id_prestamo
+        id_prestamo: prestamo.id_prestamo,
+        unica: true
       })
     }
 
@@ -122,7 +124,8 @@ const verificarPrestamos = async () => {
         tipo: 'prestamo_vencido',
         titulo: 'Tu préstamo ha vencido',
         mensaje: 'No devolviste los materiales a tiempo. Tus servicios de biblioteca están suspendidos hasta que regularices tu situación.',
-        id_prestamo: prestamo.id_prestamo
+        id_prestamo: prestamo.id_prestamo,
+        unica: true
       })
     }
 
@@ -139,7 +142,9 @@ const verificarPrestamos = async () => {
           tipo: 'prestamo_vencido',
           titulo: 'Préstamos vencidos pendientes',
           mensaje: `${activosVencidos.length} préstamo${activosVencidos.length > 1 ? 's han' : ' ha'} vencido hoy. Revisá la sección de sanciones para confirmar o rechazar.`,
-          id_prestamo: null
+          id_prestamo: null,
+          rol_destino: 'admin',
+          unica: true
         })
       }
     }
@@ -161,7 +166,8 @@ const verificarPrestamos = async () => {
         tipo: 'prestamo_por_vencer',
         titulo: 'Tu préstamo vence mañana',
         mensaje: 'Recordá devolver los libros mañana o solicitar una renovación antes de que venza el plazo.',
-        id_prestamo: prestamo.id_prestamo
+        id_prestamo: prestamo.id_prestamo,
+        unica: true
       })
     }
 
@@ -194,7 +200,8 @@ const verificarPrestamos = async () => {
           tipo: 'prestamo_vencido',
           titulo: 'Sanción escalada automáticamente',
           mensaje: `La sanción #${sancion.id_sancion} superó el plazo de 30 días y fue escalada a entidades superiores.`,
-          id_prestamo: sancion.id_prestamo
+          id_prestamo: sancion.id_prestamo,
+          rol_destino: 'admin'
         })
       }
     }
