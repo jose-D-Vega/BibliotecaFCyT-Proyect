@@ -16,7 +16,7 @@ Sistema completo de gestión de biblioteca desarrollado con **Node.js/Express** 
 - ✅ **Registro de Actividades** - Auditoría de todas las operaciones
 - ✅ **Control de Sesiones** - Seguimiento de sesiones activas
 - ✅ **Autenticación Segura** - Login con JWT y Google OAuth 2.0
-- ✅ **Control de Acceso por Roles** - Autorización basada en roles (admin, bibliotecario, usuario)
+- ✅ **Control de Acceso por Roles** - Autorización basada en roles (admin, bibliotecario, normal)
 - ✅ **Subida de Imágenes** - Upload de portadas con Multer + Supabase
 - ✅ **API REST** - Interfaz completa con CORS habilitado
 - ✅ **Manejo Global de Errores** - Middleware centralizado de errores
@@ -24,7 +24,6 @@ Sistema completo de gestión de biblioteca desarrollado con **Node.js/Express** 
 ---
 
 ## 🏗️ Estructura del Proyecto
-
 
 ```
 BibliotecaFCyT-Proyect/
@@ -36,7 +35,8 @@ BibliotecaFCyT-Proyect/
 │ ├── app.js # Configuración de Express y registro de rutas
 │ ├── config/
 │ │ ├── db.js # Conexión a PostgreSQL
-│ │ └── passport.js # Estrategias de autenticación
+│ │ ├── passport.js # Estrategias de autenticación (Google OAuth)
+│ │ └── supabase.js # Cliente Supabase (almacenamiento)
 │ ├── controllers/ # Lógica de negocio
 │ │ ├── auth.controller.js
 │ │ ├── books.controller.js
@@ -49,8 +49,8 @@ BibliotecaFCyT-Proyect/
 │ │ ├── notifications.controller.js
 │ │ └── session.controller.js
 │ ├── middlewares/ # Middleware personalizado
-│ │ ├── auth.js # Verificación de JWT
-│ │ ├── roles.js # Control de roles (admin, bibliotecario, usuario)
+│ │ ├── auth.js # Verificación de JWT (verifyToken)
+│ │ ├── roles.js # Control de roles (isAdmin, isBibliotecario, isNormal)
 │ │ ├── upload.js # Multer para subida de imágenes
 │ │ └── error.middleware.js # Manejo global de errores
 │ ├── routes/ # Definición de endpoints
@@ -75,6 +75,11 @@ BibliotecaFCyT-Proyect/
 │ │ ├── activity.queries.js
 │ │ ├── notifications.queries.js
 │ │ └── session.queries.js
+│ ├── jobs/
+│ │ └── loan.checker.js # Job automático para préstamos vencidos
+│ ├── utils/
+│ │ ├── validators.js # Validadores reutilizables
+│ │ └── storage.js # Utilidades de almacenamiento
 │ └── services/ # Servicios reutilizables
 │
 └── .env # Variables de entorno (no subir a git)
@@ -94,6 +99,9 @@ BibliotecaFCyT-Proyect/
 | **Google OAuth 2.0** | 2.0.0 | Login social |
 | **CORS** | 2.8.6 | Compartir recursos entre dominios |
 | **dotenv** | 17.3.1 | Variables de entorno |
+| **Multer** | 2.1.1 | Subida de archivos |
+| **Supabase** | 2.105.1 | Almacenamiento en la nube |
+| **node-cron** | 4.2.1 | Jobs programados |
 | **Nodemon** | 3.1.14 | Reinicio automático (dev) |
 
 ---
@@ -120,36 +128,21 @@ npm install
 ```
 
 ### 3. Configurar variables de entorno
-Crear archivo `.env` en la raíz del proyecto:
+Copiar `.env.example` a `.env` y completar los valores:
 ```env
-# Puerto del servidor
 PORT=3210
-
-# Base de datos PostgreSQL
 DATABASE_URL=postgresql://usuario:contraseña@localhost:5432/bibliotecafcyt
-
-# Secreto JWT
 JWT_SECRET=tu-secreto-super-seguro
-
-# Google OAuth
-GOOGLE_CLIENT_ID=tu-cliente-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=tu-cliente-secreto
-
-# Frontend URL
 FRONTEND_URL=http://localhost:5173
-
-# Ambiente
+GOOGLE_CLIENT_ID=tu_client_id_de_google
+GOOGLE_CLIENT_SECRET=tu_client_secret_de_google
+GOOGLE_CALLBACK_URL=http://localhost:3210/api/auth/google/callback
+SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_SERVICE_KEY=tu-service-role-key
 NODE_ENV=development
 ```
 
-### 4. Inicializar base de datos
-Ejecutar las migraciones/scripts SQL necesarios:
-```bash
-# Crear esquema de BD (desde tu gestor SQL)
-psql -U usuario -d bibliotecafcyt -f ./database/schema.sql
-```
-
-### 5. Iniciar el servidor
+### 4. Iniciar el servidor
 ```bash
 # Modo desarrollo (con nodemon)
 npm run dev
@@ -166,103 +159,139 @@ El servidor estará disponible en: `http://localhost:3210`
 
 ### Health Check
 ```
-GET /api/health - Verificar estado del servidor
+GET    /api/health                          - Verificar estado del servidor
 ```
 
 ### Autenticación
 ```
-POST   /api/auth/register       - Registrar nuevo usuario
-POST   /api/auth/login          - Login con credenciales
-GET    /api/auth/google         - Login con Google
-GET    /api/auth/google/callback - Callback de Google
-POST   /api/auth/logout         - Cerrar sesión
+GET    /api/auth/google                     - Iniciar login con Google (redirige a Google)
+GET    /api/auth/google/callback            - Callback de Google; genera y devuelve el JWT
+GET    /api/auth/me                         - Obtener datos del usuario autenticado          🔒 Requiere auth
 ```
 
 ### Libros
 ```
-GET    /api/books               - Listar libros
-GET    /api/books/:id           - Obtener libro específico
-POST   /api/books               - Crear nuevo libro (admin)
-PUT    /api/books/:id           - Actualizar libro (admin)
-DELETE /api/books/:id           - Eliminar libro (admin)
+GET    /api/books                           - Listar libros (filtros y paginación)
+GET    /api/books/:id                       - Obtener libro por ID
+POST   /api/books                           - Crear nuevo libro (con imagen)                 🔒 bibliotecario / admin
+PUT    /api/books/:id                       - Actualizar libro (con imagen)                  🔒 bibliotecario / admin
+DELETE /api/books/:id                       - Eliminar libro                                 🔒 admin
 ```
 
-### Copias
+### Ejemplares (Copias)
 ```
-GET    /api/books/:id_libro/copies        - Listar copias de un libro
-POST   /api/books/:id_libro/copies        - Agregar copia (admin)
-PUT    /api/books/:id_libro/copies/:id    - Actualizar copia (admin)
-DELETE /api/books/:id_libro/copies/:id    - Eliminar copia (admin)
+GET    /api/books/:id_libro/copies          - Listar ejemplares de un libro
+GET    /api/books/:id_libro/copies/:id      - Obtener un ejemplar
+POST   /api/books/:id_libro/copies          - Agregar ejemplar                               🔒 bibliotecario / admin
+PATCH  /api/books/:id_libro/copies/:id/estado - Cambiar estado del ejemplar                 🔒 admin
+DELETE /api/books/:id_libro/copies/:id      - Eliminar ejemplar                              🔒 admin
 ```
 
 ### Préstamos
 ```
-GET    /api/loans               - Listar préstamos
-POST   /api/loans               - Crear nuevo préstamo
-PUT    /api/loans/:id/return    - Registrar devolución
-GET    /api/loans/user/:id_user - Préstamos de un usuario
+GET    /api/loans                           - Listar préstamos (según rol del usuario)       🔒 Requiere auth
+GET    /api/loans/:id                       - Obtener detalle de un préstamo                 🔒 Requiere auth
+POST   /api/loans                           - Crear solicitud de préstamo                    🔒 Requiere auth
+PATCH  /api/loans/:id/cancel                - Cancelar un préstamo                           🔒 Requiere auth
+PATCH  /api/loans/:id/cancel-smart          - Cancelar solo ítems pendientes                 🔒 Requiere auth
+PATCH  /api/loans/:id/renew                 - Solicitar renovación de préstamo               🔒 Requiere auth
+PATCH  /api/loans/:id/renew/approve         - Aprobar solicitud de renovación                🔒 bibliotecario / admin
+PATCH  /api/loans/:id/renew/reject          - Rechazar solicitud de renovación               🔒 bibliotecario / admin
+PATCH  /api/loans/:id/detalle/:id_ejemplar  - Aprobar o rechazar un ítem del préstamo        🔒 bibliotecario / admin
+PATCH  /api/loans/:id/activate              - Activar préstamo aprobado (entrega física)     🔒 bibliotecario / admin
 ```
+
+### Devoluciones
+```
+GET    /api/returns/mis-devoluciones        - Ver mis devoluciones                           🔒 Requiere auth
+GET    /api/returns/activos                 - Listar todos los préstamos activos             🔒 bibliotecario / admin
+GET    /api/returns/search                  - Buscar préstamos activos                       🔒 bibliotecario / admin
+GET    /api/returns/historial               - Historial de devoluciones                      🔒 bibliotecario / admin
+GET    /api/returns/historial-prestamos     - Préstamos con sus devoluciones                 🔒 bibliotecario / admin
+GET    /api/returns/:id                     - Detalle de préstamo para devolución            🔒 bibliotecario / admin
+GET    /api/returns/:id/detalle-devoluciones - Detalle de devoluciones de un préstamo        🔒 bibliotecario / admin
+POST   /api/returns/:id/devolver            - Registrar devolución de ejemplares             🔒 bibliotecario / admin
+PATCH  /api/returns/prestamo/:id_prestamo/reserva-afectada/:id_ejemplar_anterior - Resolver reserva afectada 🔒 bibliotecario / admin
+```
+
 ### Sanciones
 ```
-GET /api/sanctions/mis-sanciones - Mis sanciones (usuario autenticado)
-GET /api/sanctions/buscar-prestamo - Buscar préstamos sancionables (admin)
-GET /api/sanctions/prestamo/:id_prestamo/ejemplares - Ejemplares de un préstamo (admin)
-GET /api/sanctions/agrupadas - Sanciones agrupadas por préstamo (admin)
-GET /api/sanctions/prestamo/:id_prestamo - Sanciones de un préstamo (admin)
-GET /api/sanctions - Listar todas las sanciones (admin)
-GET /api/sanctions/:id - Obtener sanción específica (admin)
-POST /api/sanctions - Crear sanción (admin)
-PATCH /api/sanctions/:id/resolver - Resolver sanción (admin)
-PATCH /api/sanctions/:id/escalar - Escalar sanción (admin)
-PATCH /api/sanctions/:id/confirmar - Confirmar sanción (admin)
-PATCH /api/sanctions/:id/rechazar - Rechazar sanción (admin)
+GET    /api/sanctions/mis-sanciones                          - Mis sanciones                🔒 Requiere auth
+GET    /api/sanctions/buscar-prestamo                        - Buscar préstamos sancionables 🔒 admin
+GET    /api/sanctions/prestamo/:id_prestamo/ejemplares       - Ejemplares de un préstamo    🔒 admin
+GET    /api/sanctions/agrupadas                              - Sanciones agrupadas           🔒 admin
+GET    /api/sanctions/prestamo/:id_prestamo                  - Sanciones de un préstamo     🔒 admin
+GET    /api/sanctions                                        - Listar todas las sanciones   🔒 bibliotecario / admin
+GET    /api/sanctions/:id                                    - Obtener sanción por ID        🔒 bibliotecario / admin
+POST   /api/sanctions                                        - Crear sanción                 🔒 admin
+PATCH  /api/sanctions/:id/confirmar                          - Confirmar sanción             🔒 admin
+PATCH  /api/sanctions/:id/rechazar                           - Rechazar sanción              🔒 admin
+PATCH  /api/sanctions/:id/resolver                           - Resolver sanción              🔒 admin
+PATCH  /api/sanctions/:id/escalar                            - Escalar sanción               🔒 admin
 ```
 
 ### Usuarios
 ```
-GET    /api/users               - Listar usuarios (admin)
-GET    /api/users/:id           - Obtener perfil de usuario
-PUT    /api/users/:id           - Actualizar perfil
-DELETE /api/users/:id           - Eliminar usuario (admin)
+GET    /api/users/tipos                     - Listar tipos de usuario                        🔒 Requiere auth
+GET    /api/users                           - Listar todos los usuarios                      🔒 admin
+GET    /api/users/:id                       - Obtener perfil de usuario                      🔒 Requiere auth
+PUT    /api/users/me                        - Actualizar propio perfil (CI, teléfono)        🔒 Requiere auth
+PATCH  /api/users/:id/rol                   - Cambiar rol de un usuario                      🔒 admin
+PATCH  /api/users/:id/activo                - Activar o desactivar cuenta                    🔒 admin
+PATCH  /api/users/:id/telefono              - Actualizar teléfono de un usuario              🔒 admin
+DELETE /api/users/:id                       - Eliminar usuario                               🔒 admin
 ```
 
 ### Actividades
 ```
-GET    /api/activity            - Listar todas las actividades
-GET    /api/activity/user/:id   - Actividades de un usuario
+GET    /api/activity                        - Historial de actividades del sistema           🔒 bibliotecario / admin
 ```
 
 ### Notificaciones
 ```
-GET    /api/notifications       - Listar notificaciones
-POST   /api/notifications       - Crear notificación
+GET    /api/notifications                   - Ver mis notificaciones                         🔒 Requiere auth
+PATCH  /api/notifications/:id/leida         - Marcar notificación como leída                 🔒 Requiere auth
+PATCH  /api/notifications/leidas            - Marcar todas las notificaciones como leídas    🔒 Requiere auth
 ```
 
 ### Sesiones
 ```
-GET    /api/sessions            - Listar sesiones activas
+GET    /api/sessions                        - Ver historial de sesiones                      🔒 admin
 ```
+
 ---
 
 ## 🔐 Autenticación y Autorización
 
-El proyecto utiliza **JWT (JSON Web Tokens)** para proteger los endpoints.
+El sistema usa **Google OAuth 2.0** restringido al dominio institucional `@fctunca.edu.py`. Al autenticarse, el backend genera un **JWT** que el cliente debe enviar en el header de cada request protegido.
+
+**Header requerido en rutas protegidas:**
+```
+Authorization: Bearer <token>
+```
+
+**Payload del JWT:**
+```json
+{
+  "id_usuario": 1,
+  "correo": "usuario@fctunca.edu.py",
+  "nombre": "Nombre Apellido",
+  "rol": "normal | bibliotecario | admin"
+}
+```
+El token tiene una expiración de **8 horas**.
 
 ### Sistema de Roles
-- **admin** - Acceso total (crear, editar, eliminar)
-- **user** - Lectura y crear préstamos
-- **guest** - Solo lectura
+- **admin** - Acceso total al sistema
+- **bibliotecario** - Gestión de préstamos, devoluciones, libros y actividad
+- **normal** - Consultas, solicitud de préstamos y perfil propio
 
-### Uso de Middlewares
+### Middlewares disponibles
 ```javascript
-// Verificar autenticación
-const { authenticate } = require('./middlewares/auth')
-
-// Verificar role específico
-const { authorize } = require('./middlewares/roles')
-
-// Aplicar a una ruta
-app.post('/api/books', authenticate, authorize('admin'), createBook)
+const { verifyToken } = require('./middlewares/auth')       // Verifica el JWT
+const { isAdmin } = require('./middlewares/roles')          // admin o bibliotecario
+const { isBibliotecario } = require('./middlewares/roles')  // bibliotecario o admin
+const { isNormal } = require('./middlewares/roles')         // cualquier usuario autenticado
 ```
 
 ---
@@ -278,9 +307,6 @@ npm run dev
 
 # Iniciar producción
 npm start
-
-# Ejecutar tests (por implementar)
-npm test
 ```
 
 ---
@@ -301,34 +327,6 @@ module.exports = pool;
 
 ---
 
-## 🧪 Testing (Próximamente)
-
-Para ejecutar tests unitarios:
-```bash
-npm test
-```
-
----
-
-## 📚 Documentación Adicional
-
-- [Express.js Documentation](https://expressjs.com/)
-- [Passport.js Documentation](http://www.passportjs.org/)
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
-- [JWT Documentation](https://jwt.io/)
-
----
-
-## 🤝 Contribuir
-
-1. Fork el proyecto
-2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
-
----
-
 ## 📄 Licencia
 
 Este proyecto está bajo la licencia **ISC**.
@@ -337,14 +335,8 @@ Este proyecto está bajo la licencia **ISC**.
 
 ## ✨ Autor
 
-**Equipo de Ingeniería de Software II**  
-*UNCA - FCyT - 7º Semestre*
-
----
-
-## 📞 Soporte
-
-Para reportar problemas o sugerencias, abre un **Issue** en el repositorio.
+**Equipo de Ingeniería en Informática — Programación Web I**  
+*FCyT — Universidad Nacional de Caaguazú*
 
 ---
 
