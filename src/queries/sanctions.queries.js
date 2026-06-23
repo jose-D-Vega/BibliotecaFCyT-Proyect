@@ -338,8 +338,8 @@ const getMySanctions = async (id_usuario) => {
   const { rows } = await pool.query(
     `SELECT
        s.*,
-       l.titulo AS libro_titulo,
-       l.autor AS libro_autor,
+       l.titulo AS titulo_material,
+       l.autor AS autor_material,
        p.fecha_tope_devolucion
      FROM sanciones s
      LEFT JOIN prestamos p ON s.id_prestamo = p.id_prestamo
