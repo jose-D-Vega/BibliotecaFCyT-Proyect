@@ -116,7 +116,7 @@ const createLoan = async (id_usuario, itemsCarrito) => {
 }
 
 // Respuesta del bibliotecario — aprueba o rechaza ejemplar por ejemplar
-const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_bibliotecario) => {
+const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_bibliotecario, observaciones) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -124,10 +124,11 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
     // Actualizar el detalle
     const { rows: detalle } = await client.query(
       `UPDATE detalles_prestamos
-       SET estado_prestamo_ejemplar = $1
-       WHERE id_prestamo = $2 AND id_ejemplar = $3
-       RETURNING *`,
-      [estado, id_prestamo, id_ejemplar]
+      SET estado_prestamo_ejemplar = $1,
+      observaciones = $4
+      WHERE id_prestamo = $2 AND id_ejemplar = $3
+      RETURNING *`,
+      [estado, id_prestamo, id_ejemplar, observaciones || '']
     )
 
     if (detalle.length === 0) {
@@ -247,7 +248,7 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
 }
 
 // Activar préstamo — usuario retira todos los ejemplares aprobados
-const activateLoan = async (id_prestamo) => {
+const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -278,10 +279,11 @@ const activateLoan = async (id_prestamo) => {
       `UPDATE prestamos
        SET estado_prestamo = 'activo',
            fecha_activacion = NOW(),
-           fecha_tope_devolucion = $1
-       WHERE id_prestamo = $2
+           fecha_tope_devolucion = $1,
+           id_bibliotecario_activacion = $2
+       WHERE id_prestamo = $3
        RETURNING *`,
-      [fechaTope, id_prestamo]
+      [fechaTope, id_bibliotecario_activacion, id_prestamo]
     )
 
     // Actualizar detalles aprobados a activo
@@ -347,9 +349,19 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
     }
 
     const { rows: cancelado } = await client.query(
-      `UPDATE prestamos SET estado_prestamo = 'cancelado'
-       WHERE id_prestamo = $1
-       RETURNING *`,
+      `UPDATE prestamos
+      SET estado_prestamo = 'cancelado',
+          fecha_cancelacion = NOW()
+      WHERE id_prestamo = $1
+      RETURNING *`,
+      [id_prestamo]
+    )
+
+    await client.query(
+      `UPDATE detalles_prestamos
+      SET estado_prestamo_ejemplar = 'cancelado'
+      WHERE id_prestamo = $1
+        AND estado_prestamo_ejemplar IN ('solicitado', 'aprobado')`,
       [id_prestamo]
     )
 
@@ -363,7 +375,109 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
   }
 }
 
+const cancelLoanSmart = async (id_prestamo, id_usuario) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows: prestamo } = await client.query(
+      `SELECT * FROM prestamos 
+       WHERE id_prestamo = $1 AND id_usuario = $2`,
+      [id_prestamo, id_usuario]
+    )
+
+    if (prestamo.length === 0) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const actual = prestamo[0].estado_prestamo
+
+    const estadosPréstamo = ['aprobado', 'parcialmente_aprobado']
+    const estadosReserva = ['reserva_aprobada', 'reserva_parcialmente_aprobada']
+
+    let nuevoEstado = null
+
+    if (estadosPréstamo.includes(actual)) {
+      nuevoEstado = 'solicitado'
+    }
+
+    if (estadosReserva.includes(actual)) {
+      nuevoEstado = 'solicitud_reserva'
+    }
+
+    if (!nuevoEstado) {
+      await client.query('ROLLBACK')
+      return { error: `No se puede cancelar desde estado: ${actual}` }
+    }
+
+    // liberar ejemplares si era reserva
+    if (prestamo[0].es_reserva) {
+      await client.query(
+        `UPDATE ejemplares SET estado_ejemplar = 'disponible'
+         WHERE id_ejemplar IN (
+           SELECT id_ejemplar FROM detalles_prestamos
+           WHERE id_prestamo = $1 AND estado_prestamo_ejemplar != 'rechazado'
+         )`,
+        [id_prestamo]
+      )
+    }
+
+    const { rows: updated } = await client.query(
+      `UPDATE prestamos 
+       SET estado_prestamo = $1
+       WHERE id_prestamo = $2
+       RETURNING *`,
+      [nuevoEstado, id_prestamo]
+    )
+
+    await client.query('COMMIT')
+    return updated[0]
+
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+
+const getLoanMaterials = async (id_prestamo) => {
+  const { rows } = await pool.query(
+    `SELECT
+       l.id_libro,
+       l.titulo,
+       l.autor,
+       e.id_ejemplar
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     JOIN libros l ON e.id_libro = l.id_libro
+     WHERE dp.id_prestamo = $1
+     ORDER BY l.id_libro`,
+    [id_prestamo]
+  )
+
+  const grouped = {}
+
+  for (const row of rows) {
+    if (!grouped[row.id_libro]) {
+      grouped[row.id_libro] = {
+        id: row.id_libro,
+        titulo: row.titulo,
+        autor: row.autor,
+        ejemplares: []
+      }
+    }
+
+    grouped[row.id_libro].ejemplares.push(row.id_ejemplar)
+  }
+
+  return Object.values(grouped)
+}
+
 // Listar préstamos con filtros
+
 
 const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta, limit, offset }) => {
   const values = []
@@ -404,10 +518,26 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
        p.*,
        u.nombre_apellido,
        u.correo,
+       COALESCE(
+         JSON_AGG(
+           JSON_BUILD_OBJECT(
+             'id_ejemplar', dp.id_ejemplar,
+             'estado_prestamo_ejemplar', dp.estado_prestamo_ejemplar,
+             'observaciones', dp.observaciones,
+             'es_reserva', dp.es_reserva,
+             'estado_ejemplar', e.estado_ejemplar,
+             'titulo', l.titulo,
+             'autor', l.autor
+           ) ORDER BY dp.id_ejemplar
+         ) FILTER (WHERE dp.id_ejemplar IS NOT NULL),
+         '[]'
+       ) AS detalles,
        COUNT(dp.id_ejemplar) AS total_ejemplares
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      LEFT JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+     LEFT JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     LEFT JOIN libros l ON e.id_libro = l.id_libro
      ${whereClause}
      GROUP BY p.id_prestamo, u.nombre_apellido, u.correo
      ORDER BY p.fecha_solicitud DESC
@@ -486,7 +616,15 @@ const getLoanById = async (id_prestamo) => {
     [id_prestamo]
   )
 
-  return { ...prestamo[0], detalles }
+const materiales = await getLoanMaterials(id_prestamo)
+
+return {
+  ...prestamo[0],
+  detalles,
+  materiales,
+  total_materiales: materiales.length,
+  total_ejemplares: detalles.length
+}
 }
 
 // Solicitud de renovación
@@ -600,13 +738,65 @@ const renewLoan = async (id_prestamo, id_usuario) => {
   }
 }
 
+const approveRenewal = async (id_prestamo) => {
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    // calcular nueva fecha
+    const nuevaFecha = new Date()
+    nuevaFecha.setDate(nuevaFecha.getDate() + 5)
+
+    // actualizar SOLO el préstamo existente
+    const { rows } = await client.query(
+      `
+      UPDATE prestamos
+      SET fecha_tope_devolucion = $1,
+          estado_prestamo = 'activo',
+          fecha_respuesta = NOW()
+      WHERE id_prestamo = $2
+      RETURNING *
+      `,
+      [nuevaFecha, id_prestamo]
+    )
+
+    await client.query('COMMIT')
+
+    return rows[0]
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+const rejectRenewal = async (id_prestamo) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE prestamos
+    SET estado_prestamo = 'activo',
+        fecha_respuesta = NOW()
+    WHERE id_prestamo = $1
+    RETURNING *
+    `,
+    [id_prestamo]
+  )
+
+  return rows[0]
+}
+
 module.exports = {
   createLoan,
   respondLoanDetail,
   activateLoan,
   cancelLoan,
+  cancelLoanSmart,
   getLoans,
   countLoans,
   getLoanById,
-  renewLoan
+  renewLoan,
+  approveRenewal,
+  rejectRenewal
 }

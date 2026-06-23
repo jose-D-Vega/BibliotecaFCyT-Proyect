@@ -8,7 +8,8 @@ const {
   getHistorialHandler,
   getPrestamosConDevolucionesHandler,
   getDetalleDevolucionesHandler,
-  getDevolucionesUsuarioHandler
+  getDevolucionesUsuarioHandler,
+  resolveReservaAfectadaHandler,
 } = require("../controllers/returns.controller");
 const { verifyToken } = require("../middlewares/auth");
 const { isBibliotecario } = require("../middlewares/roles");
@@ -35,6 +36,11 @@ router.get(
   isBibliotecario,
   getDetalleDevolucionesHandler,
 );
+
+router.patch(
+  '/prestamo/:id_prestamo/reserva-afectada/:id_ejemplar_anterior',
+  verifyToken, isBibliotecario, resolveReservaAfectadaHandler
+)
 
 router.post(
   "/:id/devolver",

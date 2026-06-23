@@ -13,7 +13,9 @@ const activityRoutes = require('./routes/activity.routes')
 const sessionRoutes = require('./routes/session.routes')
 const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
-const sancionesRoutes = require('./routes/sansiones.routes')
+const sanctionsRoutes = require('./routes/sanctions.routes')
+
+const errorHandler = require('./middlewares/error.middleware')
 
 const app = express()
 
@@ -24,7 +26,7 @@ app.use(cors({
 }))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
-app.use(passport.initialize()) 
+app.use(passport.initialize())
 
 // Rutas
 app.use('/api/health', healthRoutes)
@@ -37,7 +39,8 @@ app.use('/api/activity', activityRoutes)
 app.use('/api/sessions', sessionRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/returns', returnsRoutes)
-app.use('/api/sanciones', sancionesRoutes)
+app.use('/api/sanctions', sanctionsRoutes)
+
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
   res.json({ message: 'API BibliotecaFCyT' })
@@ -47,5 +50,7 @@ app.get('/', (req, res) => {
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada' })
 })
+
+app.use(errorHandler)
 
 module.exports = app

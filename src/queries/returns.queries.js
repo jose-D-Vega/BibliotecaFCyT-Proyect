@@ -1,4 +1,5 @@
 const pool = require('../config/db')
+const { autoResolveFaltaEntrega } = require('./sanctions.queries')
 
 // Buscar préstamos activos por datos del usuario
 const searchActiveLoans = async (search) => {
@@ -47,7 +48,7 @@ const getLoanForReturn = async (id_prestamo) => {
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      WHERE p.id_prestamo = $1
-       AND p.estado_prestamo IN ('activo', 'pendiente_devolucion')`,
+       AND p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido')`,
     [id_prestamo]
   )
 
@@ -73,12 +74,61 @@ const getLoanForReturn = async (id_prestamo) => {
   return { ...prestamo[0], ejemplares }
 }
 
+// Mapear estado_devuelto -> estado_ejemplar
+const ESTADO_EJEMPLAR_POR_DEVOLUCION = {
+  bueno: 'disponible',
+  deteriorado: 'deteriorado',
+  danado: 'perdido' // "dañado" grave -> se trata como pérdida (no reutilizable)
+}
+
+// Buscar si un ejemplar tenía una reserva aprobada esperándolo, y si hay sustituto disponible
+const buscarReservaAfectada = async (client, id_ejemplar) => {
+  // ¿Hay una reserva (detalles_prestamos.es_reserva = true) que apunta a este ejemplar
+  // y aún está en estado_prestamo_ejemplar = 'aprobado' (esperando que se libere)?
+  const { rows: reservas } = await client.query(
+    `SELECT
+       dp.id_prestamo, dp.id_ejemplar, p.id_usuario, p.estado_prestamo,
+       e.id_libro
+     FROM detalles_prestamos dp
+     JOIN prestamos p ON dp.id_prestamo = p.id_prestamo
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     WHERE dp.id_ejemplar = $1
+       AND dp.es_reserva = true
+       AND dp.estado_prestamo_ejemplar = 'aprobado'
+       AND p.estado_prestamo IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')`,
+    [id_ejemplar]
+  )
+
+  if (reservas.length === 0) return null
+
+  const reserva = reservas[0]
+
+  // Buscar un ejemplar sustituto disponible del mismo libro
+  const { rows: sustitutos } = await client.query(
+    `SELECT id_ejemplar FROM ejemplares
+     WHERE id_libro = $1 AND estado_ejemplar = 'disponible'
+     ORDER BY id_ejemplar ASC
+     LIMIT 1`,
+    [reserva.id_libro]
+  )
+
+  return {
+    id_prestamo: reserva.id_prestamo,
+    id_ejemplar_afectado: id_ejemplar,
+    id_usuario: reserva.id_usuario,
+    id_libro: reserva.id_libro,
+    sustituto_disponible: sustitutos.length > 0 ? sustitutos[0].id_ejemplar : null
+  }
+}
+
 // Registrar devolución de ejemplares
 const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
   // devoluciones = [{ id_ejemplar, estado_devuelto, observaciones }]
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+
+    const reservasAfectadas = []
 
     for (const dev of devoluciones) {
       // Insertar en devoluciones
@@ -89,20 +139,27 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
         [id_prestamo, dev.id_ejemplar, id_bibliotecario, dev.estado_devuelto, dev.observaciones || null]
       )
 
-      // Actualizar detalle del préstamo
+      // Actualizar detalle del préstamo (sin id_bibliotecario, ahora redundante)
       await client.query(
         `UPDATE detalles_prestamos
-         SET estado_prestamo_ejemplar = 'devuelto',
-             id_bibliotecario = $1
-         WHERE id_prestamo = $2 AND id_ejemplar = $3`,
-        [id_bibliotecario, id_prestamo, dev.id_ejemplar]
+         SET estado_prestamo_ejemplar = 'devuelto'
+         WHERE id_prestamo = $1 AND id_ejemplar = $2`,
+        [id_prestamo, dev.id_ejemplar]
       )
 
-      // Liberar el ejemplar
+      const nuevoEstadoEjemplar = ESTADO_EJEMPLAR_POR_DEVOLUCION[dev.estado_devuelto] || 'disponible'
+
+      // Si el ejemplar vuelve en buen estado, verificar si tenía una reserva esperándolo.
+      // Si vuelve dañado/perdido, igual puede afectar una reserva (no se le puede entregar al reservante).
+      const reservaAfectada = await buscarReservaAfectada(client, dev.id_ejemplar)
+      if (reservaAfectada) {
+        reservasAfectadas.push({ ...reservaAfectada, estado_devuelto: dev.estado_devuelto })
+      }
+
+      // Actualizar estado del ejemplar
       await client.query(
-        `UPDATE ejemplares SET estado_ejemplar = 'disponible'
-         WHERE id_ejemplar = $1`,
-        [dev.id_ejemplar]
+        `UPDATE ejemplares SET estado_ejemplar = $1 WHERE id_ejemplar = $2`,
+        [nuevoEstadoEjemplar, dev.id_ejemplar]
       )
     }
 
@@ -116,13 +173,15 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
 
     const quedanPendientes = parseInt(pendientes[0].count) > 0
 
-    // Si no quedan pendientes, cerrar el préstamo
+    // "Si no quedan pendientes, cerrar el préstamo"
     if (!quedanPendientes) {
       await client.query(
         `UPDATE prestamos SET estado_prestamo = 'devuelto'
-         WHERE id_prestamo = $1`,
+        WHERE id_prestamo = $1`,
         [id_prestamo]
       )
+      // Resolver automáticamente falta_entrega si existía
+      await autoResolveFaltaEntrega(id_prestamo, client)
     }
 
     await client.query('COMMIT')
@@ -130,8 +189,56 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
     return {
       devueltos: devoluciones.length,
       prestamo_cerrado: !quedanPendientes,
-      ejemplares_pendientes: parseInt(pendientes[0].count)
+      ejemplares_pendientes: parseInt(pendientes[0].count),
+      reservas_afectadas: reservasAfectadas
     }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+// Reasignar una reserva a un ejemplar sustituto, porque el ejemplar original
+// que tenía asignado volvió dañado/perdido y ya no puede entregarse.
+const reassignReservation = async (id_prestamo, id_ejemplar_anterior, id_ejemplar_nuevo) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    // Verificar que el sustituto sigue disponible
+    const { rows: sustituto } = await client.query(
+      `SELECT estado_ejemplar FROM ejemplares WHERE id_ejemplar = $1`,
+      [id_ejemplar_nuevo]
+    )
+    if (sustituto.length === 0 || sustituto[0].estado_ejemplar !== 'disponible') {
+      await client.query('ROLLBACK')
+      return { error: 'El ejemplar sustituto ya no está disponible' }
+    }
+
+    // Cambiar el detalle de la reserva: ahora apunta al ejemplar sustituto
+    const { rows: detalle } = await client.query(
+      `UPDATE detalles_prestamos
+       SET id_ejemplar = $1
+       WHERE id_prestamo = $2 AND id_ejemplar = $3
+       RETURNING *`,
+      [id_ejemplar_nuevo, id_prestamo, id_ejemplar_anterior]
+    )
+
+    if (detalle.length === 0) {
+      await client.query('ROLLBACK')
+      return { error: 'No se encontró el detalle de la reserva a reasignar' }
+    }
+
+    // Reservar el sustituto, y el ejemplar dañado/perdido conserva su estado actual
+    await client.query(
+      `UPDATE ejemplares SET estado_ejemplar = 'reservado' WHERE id_ejemplar = $1`,
+      [id_ejemplar_nuevo]
+    )
+
+    await client.query('COMMIT')
+    return { reasignado: true, detalle: detalle[0] }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
@@ -244,7 +351,7 @@ const getAllActiveLoans = async () => {
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
-     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion')
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido') -- ← agregar vencido
      GROUP BY p.id_prestamo, u.id_usuario
      HAVING COUNT(dp.id_ejemplar) FILTER (
        WHERE dp.estado_prestamo_ejemplar = 'activo'
@@ -487,5 +594,5 @@ module.exports = {
   searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn,
   getHistorial, countHistorial,
   getPrestamosConDevoluciones, countPrestamosConDevoluciones, getDetalleDevoluciones,
-  getDevolucionesUsuario, countDevolucionesUsuario
+  getDevolucionesUsuario, countDevolucionesUsuario, reassignReservation
 }
