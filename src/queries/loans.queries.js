@@ -382,8 +382,8 @@ const cancelLoanSmart = async (id_prestamo, id_usuario) => {
 
     const { rows: prestamo } = await client.query(
       `SELECT * FROM prestamos 
-       WHERE id_prestamo = $1 AND id_usuario = $2`,
-      [id_prestamo, id_usuario]
+      WHERE id_prestamo = $1`,
+      [id_prestamo]
     )
 
     if (prestamo.length === 0) {
