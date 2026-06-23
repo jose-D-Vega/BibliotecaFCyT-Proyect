@@ -221,6 +221,14 @@ const approveRenewalHandler = async (req, res) => {
 
     const result = await approveRenewal(id)
 
+    if (!result) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' })
+    }
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error })
+    }
+
     res.json({
       message: "Renovación aprobada",
       data: result
@@ -236,6 +244,14 @@ const rejectRenewalHandler = async (req, res) => {
     const { id } = req.params
 
     const result = await rejectRenewal(id)
+
+    if (!result) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' })
+    }
+
+    if (result.error) {
+      return res.status(400).json({ error: result.error })
+    }
 
     res.json({
       message: "Renovación rechazada",
