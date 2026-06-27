@@ -157,8 +157,14 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
     const esRenovacion = prestamoData[0].numero_renovacion > 0 ||
       prestamoData[0].id_prestamo_original !== null
 
+    // Una reserva pasa por dos rondas: 1) aprobar/rechazar la solicitud de reserva,
+    // 2) una vez que ya están todos los materiales disponibles, decidir la entrega final
+    // (en esa segunda ronda se comporta como un préstamo común: aprobado/parcial/rechazado)
+    const estadoActual = prestamoData[0].estado_prestamo
+    const reservaEnRondaFinal = esReserva && ['reserva_aprobada', 'reserva_parcialmente_aprobada'].includes(estadoActual)
+
     if (todosAprobados) {
-      if (esReserva) nuevoEstado = 'reserva_aprobada'
+      if (esReserva && !reservaEnRondaFinal) nuevoEstado = 'reserva_aprobada'
       else if (esRenovacion) nuevoEstado = 'renovado' // ← directo a renovado
       else nuevoEstado = 'aprobado'
     } else if (todosRechazados) {
@@ -170,7 +176,7 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
       if (esRenovacion && vencido) nuevoEstado = 'pendiente_devolucion'
       else nuevoEstado = 'rechazado'
     } else {
-      nuevoEstado = esReserva ? 'reserva_parcialmente_aprobada' : 'parcialmente_aprobado'
+      nuevoEstado = (esReserva && !reservaEnRondaFinal) ? 'reserva_parcialmente_aprobada' : 'parcialmente_aprobado'
     }
 
     // Un solo UPDATE con el estado final correcto
@@ -233,6 +239,84 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
         tipo: 'renovacion_rechazada',
         titulo: 'Renovación rechazada',
         mensaje: `Tu solicitud de renovación fue rechazada. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros antes de recibir una sanción.`,
+        id_prestamo
+      })
+    }
+
+    // Notificar aprobación / rechazo / aprobación parcial
+    if (esReserva) {
+      if (nuevoEstado === 'reserva_aprobada') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_aprobada',
+          titulo: 'Reserva aprobada',
+          mensaje: 'Tu solicitud de reserva fue aprobada. Te avisaremos cuando el material esté disponible para retirar.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'reserva_parcialmente_aprobada') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_parcial',
+          titulo: 'Reserva parcialmente aprobada',
+          mensaje: 'Parte de tu solicitud de reserva fue aprobada. Te avisaremos cuando los materiales aceptados estén disponibles para retirar.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'aprobado') {
+        // Ronda final: ya estaban todos los materiales disponibles, el admin confirmó la entrega
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_disponible',
+          titulo: 'Tu reserva está disponible',
+          mensaje: 'Los materiales de tu reserva ya están listos para retirar. Acercate a la biblioteca.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'parcialmente_aprobado') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_disponible',
+          titulo: 'Parte de tu reserva está disponible',
+          mensaje: 'Parte de los materiales de tu reserva ya están listos para retirar. Revisá el detalle.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'rechazado') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_rechazada',
+          titulo: 'Reserva rechazada',
+          mensaje: 'Tu solicitud de reserva fue rechazada.',
+          id_prestamo
+        })
+      }
+    } else if (esRenovacion && nuevoEstado === 'rechazado') {
+      await crearNotificacion({
+        id_usuario: prestamoData[0].id_usuario,
+        tipo: 'renovacion_rechazada',
+        titulo: 'Renovación rechazada',
+        mensaje: 'Tu solicitud de renovación fue rechazada.',
+        id_prestamo
+      })
+    } else if (nuevoEstado === 'aprobado') {
+      await crearNotificacion({
+        id_usuario: prestamoData[0].id_usuario,
+        tipo: 'prestamo_aprobado',
+        titulo: 'Préstamo aprobado',
+        mensaje: 'Tu solicitud de préstamo fue aprobada. Acercate a la biblioteca a retirar los materiales.',
+        id_prestamo
+      })
+    } else if (nuevoEstado === 'parcialmente_aprobado') {
+      await crearNotificacion({
+        id_usuario: prestamoData[0].id_usuario,
+        tipo: 'prestamo_parcial',
+        titulo: 'Préstamo parcialmente aprobado',
+        mensaje: 'Parte de tu solicitud de préstamo fue aprobada. Revisá el detalle para ver qué materiales fueron aceptados.',
+        id_prestamo
+      })
+    } else if (nuevoEstado === 'rechazado') {
+      await crearNotificacion({
+        id_usuario: prestamoData[0].id_usuario,
+        tipo: 'prestamo_rechazado',
+        titulo: 'Préstamo rechazado',
+        mensaje: 'Tu solicitud de préstamo fue rechazada.',
         id_prestamo
       })
     }
@@ -303,6 +387,14 @@ const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
        )`,
       [id_prestamo]
     )
+
+    await crearNotificacion({
+      id_usuario: prestamo[0].id_usuario,
+      tipo: 'prestamo_activado',
+      titulo: 'Préstamo activado',
+      mensaje: 'Confirmamos el retiro de tus materiales. Recordá la fecha de devolución.',
+      id_prestamo
+    })
 
     await client.query('COMMIT')
     return actualizado[0]
@@ -711,6 +803,23 @@ const renewLoan = async (id_prestamo, id_usuario) => {
     )
 
     await client.query('COMMIT')
+
+    const { rows: admins } = await pool.query(
+      `SELECT u.id_usuario FROM usuarios u
+       JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
+       WHERE t.nombre_tipo = 'admin' AND u.activo = true`
+    )
+    for (const admin of admins) {
+      await crearNotificacion({
+        id_usuario: admin.id_usuario,
+        tipo: 'admin_renovacion_pendiente',
+        titulo: 'Nueva solicitud de renovación',
+        mensaje: `Hay una solicitud de renovación esperando revisión (préstamo #${id_prestamo}).`,
+        id_prestamo,
+        rol_destino: 'admin',
+        unica: true
+      })
+    }
 
     const ejemplares = detalles.map(d => d.id_ejemplar)
     const totalRenovaciones = parseInt(renovaciones[0].count)

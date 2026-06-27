@@ -16,10 +16,11 @@ const confirmSanctionHandler = async (req, res) => {
 
     await crearNotificacion({
       id_usuario: sancion.id_usuario,
-      tipo: 'prestamo_vencido',
+      tipo: 'sancion_recibida',
       titulo: 'Sanción confirmada',
       mensaje: 'El administrador confirmó tu sanción por falta de entrega. Debés devolver el material para regularizar tu situación.',
-      id_prestamo: sancion.id_prestamo
+      id_prestamo: sancion.id_prestamo,
+      id_sancion: sancion.id_sancion
     })
 
     res.json({ message: 'Sanción confirmada', data: sancion })
@@ -35,15 +36,27 @@ const rejectSanctionHandler = async (req, res) => {
     const sancion = await rejectSanction(id, req.user.id_usuario)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o ya procesada' })
 
-    await crearNotificacion({
-      id_usuario: sancion.id_usuario,
-      tipo: 'renovacion_aprobada',
-      titulo: 'Situación regularizada',
-      mensaje: 'El administrador revisó tu situación y tus servicios de biblioteca han sido restaurados.',
-      id_prestamo: sancion.id_prestamo
-    })
+    if (sancion.cuenta_habilitada) {
+      await crearNotificacion({
+        id_usuario: sancion.id_usuario,
+        tipo: 'cuenta_habilitada',
+        titulo: 'Situación regularizada',
+        mensaje: 'El administrador revisó tu situación y tus servicios de biblioteca han sido restaurados.',
+        id_prestamo: sancion.id_prestamo,
+        id_sancion: sancion.id_sancion
+      })
+    } else {
+      await crearNotificacion({
+        id_usuario: sancion.id_usuario,
+        tipo: 'sancion_resuelta',
+        titulo: 'Sanción rechazada',
+        mensaje: 'El administrador rechazó esta sanción, pero todavía tenés otras sanciones activas pendientes de resolución.',
+        id_prestamo: sancion.id_prestamo,
+        id_sancion: sancion.id_sancion
+      })
+    }
 
-    res.json({ message: 'Sanción rechazada, usuario desbloqueado', data: sancion })
+    res.json({ message: 'Sanción rechazada', data: sancion })
   } catch (error) {
     console.error('Error al rechazar sanción:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
@@ -127,10 +140,11 @@ const createSanctionHandler = async (req, res) => {
 
     await crearNotificacion({
       id_usuario,
-      tipo: 'prestamo_vencido',
+      tipo: 'sancion_recibida',
       titulo: 'Has recibido una sanción',
       mensaje: `Se registró una sanción por ${tipoLabel[tipo_infraccion]}. ${descripcionFinal}`,
-      id_prestamo: id_prestamo || null
+      id_prestamo: id_prestamo || null,
+      id_sancion: sancion.id_sancion
     })
 
     res.status(201).json({ message: 'Sanción registrada exitosamente', data: sancion })
@@ -180,14 +194,25 @@ const resolveSanctionHandler = async (req, res) => {
     const sancion = await resolveSanction(id, req.user.id_usuario)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o ya resuelta' })
 
-    // Notificar al usuario
     await crearNotificacion({
       id_usuario: sancion.id_usuario,
-      tipo: 'renovacion_aprobada',
+      tipo: 'sancion_resuelta',
       titulo: 'Sanción resuelta',
-      mensaje: 'Tu sanción ha sido resuelta. Ya podés volver a utilizar los servicios de la biblioteca.',
-      id_prestamo: sancion.id_prestamo
+      mensaje: 'Una de tus sanciones fue marcada como resuelta.',
+      id_prestamo: sancion.id_prestamo,
+      id_sancion: sancion.id_sancion
     })
+
+    if (sancion.cuenta_habilitada) {
+      await crearNotificacion({
+        id_usuario: sancion.id_usuario,
+        tipo: 'cuenta_habilitada',
+        titulo: 'Ya podés volver a usar la biblioteca',
+        mensaje: 'No tenés más sanciones activas. Tus servicios de biblioteca fueron restaurados.',
+        id_prestamo: sancion.id_prestamo,
+        id_sancion: sancion.id_sancion
+      })
+    }
 
     res.json({ message: 'Sanción resuelta exitosamente', data: sancion })
   } catch (error) {

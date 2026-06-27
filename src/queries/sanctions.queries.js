@@ -121,7 +121,9 @@ const rejectSanction = async (id_sancion, id_admin) => {
       [rows[0].id_usuario]
     )
 
-    if (parseInt(otrasSanciones[0].count) === 0) {
+    const cuentaHabilitada = parseInt(otrasSanciones[0].count) === 0
+
+    if (cuentaHabilitada) {
       await client.query(
         `UPDATE usuarios SET sancionado = false WHERE id_usuario = $1`,
         [rows[0].id_usuario]
@@ -129,7 +131,7 @@ const rejectSanction = async (id_sancion, id_admin) => {
     }
 
     await client.query('COMMIT')
-    return rows[0]
+    return { ...rows[0], cuenta_habilitada: cuentaHabilitada }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
@@ -271,7 +273,9 @@ const resolveSanction = async (id_sancion, id_admin) => {
       [sancion[0].id_usuario]
     )
 
-    if (parseInt(otrasSanciones[0].count) === 0) {
+    const cuentaHabilitada = parseInt(otrasSanciones[0].count) === 0
+
+    if (cuentaHabilitada) {
       await client.query(
         `UPDATE usuarios SET sancionado = false WHERE id_usuario = $1`,
         [sancion[0].id_usuario]
@@ -279,7 +283,7 @@ const resolveSanction = async (id_sancion, id_admin) => {
     }
 
     await client.query('COMMIT')
-    return sancion[0]
+    return { ...sancion[0], cuenta_habilitada: cuentaHabilitada }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error

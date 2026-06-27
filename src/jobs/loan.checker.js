@@ -9,7 +9,8 @@ const verificarPrestamos = async () => {
     const hoy = new Date()
     hoy.setHours(0, 0, 0, 0)
 
-    // 1. Solicitudes de renovación sin respuesta que superaron fecha_limite_respuesta
+    // ---------- Solicitudes de renovación sin respuesta que superaron fecha_limite_respuesta --------
+
     const { rows: renovacionesVencidas } = await client.query(
       `SELECT * FROM prestamos
        WHERE estado_prestamo = 'solicitud_renovacion'
@@ -39,7 +40,8 @@ const verificarPrestamos = async () => {
       })
     }
 
-    // 2. Préstamos en pendiente_devolucion que superaron su nueva fecha tope
+    // -------------- Préstamos en pendiente_devolucion que superaron su nueva fecha tope ----------
+
     const { rows: pendientesVencidos } = await client.query(
       `SELECT * FROM prestamos
        WHERE estado_prestamo = 'pendiente_devolucion'
@@ -71,7 +73,8 @@ const verificarPrestamos = async () => {
       })
     }
 
-    // 3. Préstamos activos vencidos sin solicitud de renovación pendiente
+    // ------------ Préstamos activos vencidos sin solicitud de renovación pendiente -------------
+
     const { rows: activosVencidos } = await client.query(
       `SELECT * FROM prestamos
       WHERE estado_prestamo = 'activo'
@@ -149,7 +152,8 @@ const verificarPrestamos = async () => {
       }
     }
 
-    // 4. Notificar préstamos que vencen mañana
+    //----------- Notificar préstamos que vencen mañana --------------
+
     const manana = new Date(hoy)
     manana.setDate(manana.getDate() + 1)
 
@@ -171,38 +175,39 @@ const verificarPrestamos = async () => {
       })
     }
 
-    // Escalar sanciones activas que superaron los 30 días
-    const { rows: sancionesAEscalar } = await client.query(
+    // Alertar a los admins sobre sanciones activas que superaron los 30 días.
+    // La decisión de escalar es manual del admin desde la página de sanciones;
+    // este job solo notifica, no toca estado_sancion.
+
+    const { rows: sancionesVencidas } = await client.query(
       `SELECT * FROM sanciones
       WHERE estado_sancion = 'activa'
         AND fecha_limite IS NOT NULL
+        AND tipo_infraccion != 'comportamiento'
         AND fecha_limite < $1`,
       [hoy]
     )
 
-    for (const sancion of sancionesAEscalar) {
-      await client.query(
-        `UPDATE sanciones SET estado_sancion = 'escalada'
-        WHERE id_sancion = $1`,
-        [sancion.id_sancion]
-      )
-
-      // Notificar al admin
+    if (sancionesVencidas.length > 0) {
       const { rows: admins } = await client.query(
         `SELECT u.id_usuario FROM usuarios u
         JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
         WHERE t.nombre_tipo = 'admin' AND u.activo = true`
       )
 
-      for (const admin of admins) {
-        await crearNotificacion({
-          id_usuario: admin.id_usuario,
-          tipo: 'prestamo_vencido',
-          titulo: 'Sanción escalada automáticamente',
-          mensaje: `La sanción #${sancion.id_sancion} superó el plazo de 30 días y fue escalada a entidades superiores.`,
-          id_prestamo: sancion.id_prestamo,
-          rol_destino: 'admin'
-        })
+      for (const sancion of sancionesVencidas) {
+        for (const admin of admins) {
+          await crearNotificacion({
+            id_usuario: admin.id_usuario,
+            tipo: 'admin_sancion_escalada',
+            titulo: 'Sanción sin resolver hace más de 30 días',
+            mensaje: `La sanción #${sancion.id_sancion} superó el plazo de 30 días sin resolverse. Revisala en la sección de sanciones para decidir si corresponde escalarla.`,
+            id_prestamo: sancion.id_prestamo,
+            id_sancion: sancion.id_sancion,
+            rol_destino: 'admin',
+            unica: true
+          })
+        }
       }
     }
 

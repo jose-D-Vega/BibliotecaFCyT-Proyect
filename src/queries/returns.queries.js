@@ -1,5 +1,6 @@
 const pool = require('../config/db')
 const { autoResolveFaltaEntrega } = require('./sanctions.queries')
+const { crearNotificacion } = require('./notifications.queries')
 
 // Buscar préstamos activos por datos del usuario
 const searchActiveLoans = async (search) => {
@@ -121,12 +122,53 @@ const buscarReservaAfectada = async (client, id_ejemplar) => {
   }
 }
 
+// Si una reserva ya aprobada tiene TODOS sus ejemplares pendientes listos (reservados),
+// avisa al admin para que haga la revisión final (la decisión de entrega queda en sus manos)
+const verificarReservaLista = async (client, id_prestamo_reserva) => {
+  const { rows } = await client.query(
+    `SELECT e.estado_ejemplar
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     WHERE dp.id_prestamo = $1
+       AND dp.es_reserva = true
+       AND dp.estado_prestamo_ejemplar = 'aprobado'`,
+    [id_prestamo_reserva]
+  )
+
+  const todosListos = rows.length > 0 && rows.every(r => r.estado_ejemplar === 'reservado')
+  if (!todosListos) return
+
+  const { rows: admins } = await client.query(
+    `SELECT u.id_usuario FROM usuarios u
+     JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
+     WHERE t.nombre_tipo = 'admin' AND u.activo = true`
+  )
+
+  for (const admin of admins) {
+    await crearNotificacion({
+      id_usuario: admin.id_usuario,
+      tipo: 'admin_reserva_lista',
+      titulo: 'Reserva lista para gestionar',
+      mensaje: `Todos los materiales de la reserva #${id_prestamo_reserva} ya están disponibles. Revisala para confirmar la entrega.`,
+      id_prestamo: id_prestamo_reserva,
+      rol_destino: 'admin',
+      unica: true
+    })
+  }
+}
+
 // Registrar devolución de ejemplares
 const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
   // devoluciones = [{ id_ejemplar, estado_devuelto, observaciones }]
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+
+    const { rows: prestamoInfo } = await client.query(
+      `SELECT id_usuario FROM prestamos WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+    const id_usuario_prestamo = prestamoInfo[0]?.id_usuario
 
     const reservasAfectadas = []
 
@@ -147,13 +189,22 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
         [id_prestamo, dev.id_ejemplar]
       )
 
-      const nuevoEstadoEjemplar = ESTADO_EJEMPLAR_POR_DEVOLUCION[dev.estado_devuelto] || 'disponible'
+      let nuevoEstadoEjemplar = ESTADO_EJEMPLAR_POR_DEVOLUCION[dev.estado_devuelto] || 'disponible'
 
       // Si el ejemplar vuelve en buen estado, verificar si tenía una reserva esperándolo.
       // Si vuelve dañado/perdido, igual puede afectar una reserva (no se le puede entregar al reservante).
       const reservaAfectada = await buscarReservaAfectada(client, dev.id_ejemplar)
       if (reservaAfectada) {
         reservasAfectadas.push({ ...reservaAfectada, estado_devuelto: dev.estado_devuelto })
+
+        if (dev.estado_devuelto === 'bueno') {
+          // Queda reservado para quien lo reservó, no disponible para cualquiera
+          nuevoEstadoEjemplar = 'reservado'
+          await verificarReservaLista(client, reservaAfectada.id_prestamo)
+        
+        }
+        // Si volvió dañado/perdido, no se notifica acá — se notifica cuando el bibliotecario
+        // confirme la reasignación a un sustituto (reserva_modificada, ver reassignReservation)
       }
 
       // Actualizar estado del ejemplar
@@ -182,6 +233,16 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
       )
       // Resolver automáticamente falta_entrega si existía
       await autoResolveFaltaEntrega(id_prestamo, client)
+
+      if (id_usuario_prestamo) {
+        await crearNotificacion({
+          id_usuario: id_usuario_prestamo,
+          tipo: 'prestamo_devuelto',
+          titulo: 'Devolución registrada',
+          mensaje: 'Se registró la devolución completa de tu préstamo. ¡Gracias por devolverlo!',
+          id_prestamo
+        })
+      }
     }
 
     await client.query('COMMIT')
@@ -237,7 +298,26 @@ const reassignReservation = async (id_prestamo, id_ejemplar_anterior, id_ejempla
       [id_ejemplar_nuevo]
     )
 
+    const { rows: prestamoInfo } = await client.query(
+      `SELECT id_usuario FROM prestamos WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+
+    await verificarReservaLista(client, id_prestamo)
+
     await client.query('COMMIT')
+
+    if (prestamoInfo[0]) {
+      await crearNotificacion({
+        id_usuario: prestamoInfo[0].id_usuario,
+        tipo: 'reserva_modificada',
+        titulo: 'Tu reserva tuvo cambios',
+        mensaje: 'El material que tenías reservado ya no está disponible y fue reemplazado por otro ejemplar del mismo libro.',
+        id_prestamo
+      })
+    }
+    
+
     return { reasignado: true, detalle: detalle[0] }
   } catch (error) {
     await client.query('ROLLBACK')
@@ -594,5 +674,5 @@ module.exports = {
   searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn,
   getHistorial, countHistorial,
   getPrestamosConDevoluciones, countPrestamosConDevoluciones, getDetalleDevoluciones,
-  getDevolucionesUsuario, countDevolucionesUsuario, reassignReservation
+  getDevolucionesUsuario, countDevolucionesUsuario, reassignReservation, verificarReservaLista
 }
