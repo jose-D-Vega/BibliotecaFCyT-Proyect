@@ -1,12 +1,6 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
-CREATE TABLE public.bibliotecarios (
-  id_bibliotecario integer NOT NULL,
-  nombre_usuario character varying NOT NULL,
-  contrasenia character varying NOT NULL,
-  CONSTRAINT bibliotecarios_pkey PRIMARY KEY (id_bibliotecario)
-);
 CREATE TABLE public.detalles_prestamos (
   id_prestamo integer NOT NULL,
   id_ejemplar integer NOT NULL,
@@ -100,16 +94,18 @@ CREATE TABLE public.sesiones (
 CREATE TABLE public.notificaciones (
   id_notificacion integer GENERATED ALWAYS AS IDENTITY NOT NULL,
   id_usuario integer NOT NULL,
-  tipo character varying NOT NULL CHECK (tipo::text = ANY (ARRAY['renovacion_aprobada'::character varying, 'renovacion_rechazada'::character varying, 'renovacion_vencida'::character varying, 'prestamo_por_vencer'::character varying, 'prestamo_vencido'::character varying, 'pendiente_devolucion'::character varying, 'reserva_disponible'::character varying]::text[])),
+  tipo character varying NOT NULL CHECK (tipo::text = ANY (ARRAY['renovacion_aprobada'::text, 'renovacion_rechazada'::text, 'renovacion_vencida'::text, 'prestamo_por_vencer'::text, 'prestamo_vencido'::text, 'pendiente_devolucion'::text, 'reserva_disponible'::text, 'prestamo_aprobado'::text, 'prestamo_parcial'::text, 'prestamo_rechazado'::text, 'prestamo_activado'::text, 'prestamo_devuelto'::text, 'reserva_aprobada'::text, 'reserva_parcial'::text, 'reserva_rechazada'::text, 'reserva_modificada'::text, 'sancion_recibida'::text, 'sancion_resuelta'::text, 'cuenta_habilitada'::text, 'admin_renovacion_pendiente'::text, 'admin_sancion_escalada'::text, 'admin_reserva_lista'::text])),
   titulo character varying NOT NULL,
   mensaje character varying NOT NULL,
   id_prestamo integer,
   leida boolean NOT NULL DEFAULT false,
   fecha timestamp with time zone NOT NULL DEFAULT now(),
   rol_destino character varying DEFAULT 'normal'::character varying CHECK (rol_destino::text = ANY (ARRAY['normal'::character varying, 'bibliotecario'::character varying, 'admin'::character varying]::text[])),
+  id_sancion integer,
   CONSTRAINT notificaciones_pkey PRIMARY KEY (id_notificacion),
   CONSTRAINT notificaciones_usuario FOREIGN KEY (id_usuario) REFERENCES public.usuarios(id_usuario),
-  CONSTRAINT notificaciones_prestamo FOREIGN KEY (id_prestamo) REFERENCES public.prestamos(id_prestamo)
+  CONSTRAINT notificaciones_prestamo FOREIGN KEY (id_prestamo) REFERENCES public.prestamos(id_prestamo),
+  CONSTRAINT notificaciones_id_sancion_fkey FOREIGN KEY (id_sancion) REFERENCES public.sanciones(id_sancion)
 );
 CREATE TABLE public.devoluciones (
   id_devolucion integer GENERATED ALWAYS AS IDENTITY NOT NULL,

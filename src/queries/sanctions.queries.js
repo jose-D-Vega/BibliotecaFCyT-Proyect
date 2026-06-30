@@ -302,6 +302,16 @@ const escalateSanction = async (id_sancion) => {
   return rows[0] || null
 }
 
+const desescalateSanction = async (id_sancion) => {
+  const { rows } = await pool.query(
+    `UPDATE sanciones SET estado_sancion = 'activa'
+     WHERE id_sancion = $1 AND estado_sancion = 'escalada'
+     RETURNING *`,
+    [id_sancion]
+  )
+  return rows[0] || null
+}
+
 // Resolver automáticamente falta_entrega cuando se devuelve todo
 const autoResolveFaltaEntrega = async (id_prestamo, client) => {
   const { rows: sancion } = await client.query(
@@ -360,7 +370,8 @@ const getMySanctions = async (id_usuario) => {
 const getSanctionsGroupedByLoan = async ({ estado, limit, offset }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
+  
+  let whereClause = `WHERE s.tipo_infraccion != 'comportamiento'`
 
   if (estado) {
     const estados = estado.split(',')
@@ -407,7 +418,7 @@ const getSanctionsGroupedByLoan = async ({ estado, limit, offset }) => {
 const countSanctionsGrouped = async ({ estado }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
+  let whereClause = `WHERE s.tipo_infraccion != 'comportamiento'`
 
   if (estado) {
     const estados = estado.split(',')
@@ -551,11 +562,100 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo) => {
   return { ...prestamo[0], ejemplares }
 }
 
+// Sanciones de comportamiento agrupadas por usuario.
+// Son las sanciones sin id_prestamo (o con id_prestamo pero de tipo comportamiento),
+// y se muestran en una sección separada de la vista de sanciones activas/escaladas.
+const getSancionesComportamientoAgrupadas = async ({ estado, limit, offset }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = `WHERE s.tipo_infraccion = 'comportamiento'`
+
+  if (estado) {
+    const estados = estado.split(',')
+    whereClause += ` AND s.estado_sancion = ANY($${paramIndex}::varchar[])`
+    values.push(estados)
+    paramIndex++
+  }
+
+  values.push(limit)
+  values.push(offset)
+
+  const { rows } = await pool.query(
+    `SELECT
+       u.id_usuario,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo AS usuario_correo,
+       u.ci AS usuario_ci,
+       COUNT(s.id_sancion) AS total_sanciones,
+       BOOL_OR(s.estado_sancion = 'activa')   AS tiene_activas,
+       BOOL_OR(s.estado_sancion = 'escalada') AS tiene_escaladas,
+       MIN(s.fecha_sancion)  AS fecha_primera_sancion,
+       MAX(s.fecha_sancion)  AS fecha_ultima_sancion,
+       MAX(s.fecha_fin_suspension) AS fecha_fin_suspension_maxima,
+       MAX(a.nombre_apellido) AS admin_nombre,
+       -- Incluir si alguna tiene suspensión indefinida (sin fecha_fin_suspension)
+       BOOL_OR(s.dias_suspension IS NULL AND s.fecha_fin_suspension IS NULL) AS tiene_suspension_indefinida
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     ${whereClause}
+     GROUP BY u.id_usuario, u.nombre_apellido, u.correo, u.ci
+     ORDER BY MAX(s.fecha_sancion) DESC
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    values
+  )
+  return rows
+}
+
+const countSancionesComportamientoAgrupadas = async ({ estado }) => {
+  const values = []
+  let paramIndex = 1
+  let whereClause = `WHERE s.tipo_infraccion = 'comportamiento'`
+
+  if (estado) {
+    const estados = estado.split(',')
+    whereClause += ` AND s.estado_sancion = ANY($${paramIndex}::varchar[])`
+    values.push(estados)
+    paramIndex++
+  }
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(DISTINCT s.id_usuario)
+     FROM sanciones s
+     ${whereClause}`,
+    values
+  )
+  return parseInt(rows[0].count)
+}
+
+// Todas las sanciones de comportamiento de un usuario — para el modal de detalle
+const getSancionesComportamientoByUsuario = async (id_usuario) => {
+  const { rows } = await pool.query(
+    `SELECT
+       s.*,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo AS usuario_correo,
+       u.ci AS usuario_ci,
+       u.telefono AS usuario_telefono,
+       a.nombre_apellido AS admin_nombre
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     WHERE s.id_usuario = $1
+       AND s.tipo_infraccion = 'comportamiento'
+     ORDER BY s.fecha_sancion DESC`,
+    [id_usuario]
+  )
+  return rows
+}
+
 module.exports = {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
   getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
-  resolveSanction, escalateSanction,
+  resolveSanction, escalateSanction, desescalateSanction,
   autoResolveFaltaEntrega, getMySanctions,
-  searchSanctionableLoans, getLoanWithEjemplaresForSanction
+  searchSanctionableLoans, getLoanWithEjemplaresForSanction,
+  getSancionesComportamientoAgrupadas, countSancionesComportamientoAgrupadas,
+  getSancionesComportamientoByUsuario
 }

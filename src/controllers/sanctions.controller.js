@@ -3,9 +3,11 @@ const { crearNotificacion } = require('../queries/notifications.queries')
 const {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
-  resolveSanction, escalateSanction, getMySanctions, 
+  resolveSanction, escalateSanction, getMySanctions, desescalateSanction, 
   getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
-  searchSanctionableLoans, getLoanWithEjemplaresForSanction
+  searchSanctionableLoans, getLoanWithEjemplaresForSanction,
+  getSancionesComportamientoAgrupadas, countSancionesComportamientoAgrupadas,
+  getSancionesComportamientoByUsuario
 } = require('../queries/sanctions.queries')
 
 const confirmSanctionHandler = async (req, res) => {
@@ -233,6 +235,18 @@ const escalateSanctionHandler = async (req, res) => {
   }
 }
 
+const desescalateSanctionHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const sancion = await desescalateSanction(id)
+    if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o no está escalada' })
+    res.json({ message: 'Sanción revertida a estado activa', data: sancion })
+  } catch (error) {
+    console.error('Error al des-escalar sanción:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 const getMySanctionsHandler = async (req, res) => {
   try {
     const sanctions = await getMySanctions(req.user.id_usuario)
@@ -309,10 +323,44 @@ const getLoanForSanctionHandler = async (req, res) => {
   }
 }
 
+const getSancionesComportamientoAgrupadasHandler = async (req, res) => {
+  try {
+    const { estado, page = 1, limit = 12 } = req.query
+    const parsedLimit = parseInt(limit)
+    const parsedPage  = parseInt(page)
+    const offset = (parsedPage - 1) * parsedLimit
+
+    const [sanciones, total] = await Promise.all([
+      getSancionesComportamientoAgrupadas({ estado, limit: parsedLimit, offset }),
+      countSancionesComportamientoAgrupadas({ estado })
+    ])
+
+    res.json({
+      data: sanciones,
+      pagination: { total, page: parsedPage, limit: parsedLimit, totalPages: Math.ceil(total / parsedLimit) }
+    })
+  } catch (error) {
+    console.error('Error al obtener sanciones de comportamiento:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const getSancionesComportamientoByUsuarioHandler = async (req, res) => {
+  try {
+    const { id_usuario } = req.params
+    const sanciones = await getSancionesComportamientoByUsuario(id_usuario)
+    res.json({ data: sanciones })
+  } catch (error) {
+    console.error('Error al obtener sanciones de comportamiento del usuario:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = {
   createSanctionHandler, confirmSanctionHandler, rejectSanctionHandler,
   getSanctionsHandler, getSanctionsGroupedHandler, getSanctionHandler,
   getSanctionsByLoanHandler, resolveSanctionHandler,
-  escalateSanctionHandler, getMySanctionsHandler,
-  searchSanctionableLoansHandler, getLoanForSanctionHandler
+  escalateSanctionHandler, getMySanctionsHandler, desescalateSanctionHandler,
+  searchSanctionableLoansHandler, getLoanForSanctionHandler,
+  getSancionesComportamientoAgrupadasHandler, getSancionesComportamientoByUsuarioHandler
 }
