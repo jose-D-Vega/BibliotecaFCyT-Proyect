@@ -151,7 +151,10 @@ const createSanctionHandler = async (req, res) => {
 
     res.status(201).json({ message: 'Sanción registrada exitosamente', data: sancion })
   } catch (error) {
-    console.error('Error al registrar sanción:', error)
+    if (error.code === 'SANCION_DUPLICADA') {
+      return res.status(409).json({ error: error.message })
+    }
+    console.error('Error al crear sanción:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
@@ -314,7 +317,13 @@ const searchSanctionableLoansHandler = async (req, res) => {
 const getLoanForSanctionHandler = async (req, res) => {
   try {
     const { id_prestamo } = req.params
-    const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo)
+    const { tipo_infraccion } = req.query
+
+    if (!tipo_infraccion) {
+      return res.status(400).json({ error: 'El tipo de infracción es requerido' })
+    }
+
+    const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo, tipo_infraccion)
     if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' })
     res.json({ data: prestamo })
   } catch (error) {

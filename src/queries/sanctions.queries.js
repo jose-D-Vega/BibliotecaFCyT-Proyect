@@ -9,7 +9,66 @@ const createSanction = async ({
   try {
     await client.query('BEGIN')
 
-    // Calcular fecha_limite para tipos que la requieren
+    // ── Validaciones de duplicado ──────────────────────────────────
+
+    // Para tipos vinculados a ejemplar: verificar que no exista ya
+    // una sanción activa del mismo tipo para ese prestamo+ejemplar
+    if (id_ejemplar && id_prestamo) {
+      const { rows: dupEjemplar } = await client.query(
+        `SELECT 1 FROM sanciones
+         WHERE id_prestamo  = $1
+           AND id_ejemplar  = $2
+           AND tipo_infraccion = $3
+           AND estado_sancion NOT IN ('rechazada', 'resuelta')
+         LIMIT 1`,
+        [id_prestamo, id_ejemplar, tipo_infraccion]
+      )
+      if (dupEjemplar.length > 0) {
+        await client.query('ROLLBACK')
+        const error = new Error('Este ejemplar ya tiene una sanción activa de este tipo para el mismo préstamo')
+        error.code = 'SANCION_DUPLICADA'
+        throw error
+      }
+    }
+
+    // Para falta_entrega: verificar que no exista ya para ese prestamo
+    if (tipo_infraccion === 'falta_entrega' && id_prestamo) {
+      const { rows: dupPrestamo } = await client.query(
+        `SELECT 1 FROM sanciones
+         WHERE id_prestamo     = $1
+           AND tipo_infraccion = 'falta_entrega'
+           AND estado_sancion NOT IN ('rechazada', 'resuelta')
+         LIMIT 1`,
+        [id_prestamo]
+      )
+      if (dupPrestamo.length > 0) {
+        await client.query('ROLLBACK')
+        const error = new Error('Este préstamo ya tiene una sanción por falta de entrega activa')
+        error.code = 'SANCION_DUPLICADA'
+        throw error
+      }
+    }
+
+    // Para comportamiento: verificar que el usuario no tenga ya una activa
+    if (tipo_infraccion === 'comportamiento') {
+      const { rows: dupComportam } = await client.query(
+        `SELECT 1 FROM sanciones
+         WHERE id_usuario      = $1
+           AND tipo_infraccion = 'comportamiento'
+           AND estado_sancion NOT IN ('rechazada', 'resuelta')
+         LIMIT 1`,
+        [id_usuario]
+      )
+      if (dupComportam.length > 0) {
+        await client.query('ROLLBACK')
+        const error = new Error('Este usuario ya tiene una sanción por comportamiento activa')
+        error.code = 'SANCION_DUPLICADA'
+        throw error
+      }
+    }
+
+    // ── Cálculo de fechas ──────────────────────────────────────────
+
     let fechaLimite = fecha_limite || null
     if (['falta_entrega', 'deterioro', 'perdida'].includes(tipo_infraccion) && !fechaLimite) {
       const f = new Date()
@@ -17,20 +76,20 @@ const createSanction = async ({
       fechaLimite = f
     }
 
-    // Calcular fecha_fin_suspension
     let fechaFinSuspension = null
     if (tipo_infraccion === 'comportamiento' && dias_suspension) {
       const f = new Date()
       f.setDate(f.getDate() + parseInt(dias_suspension))
       fechaFinSuspension = f
     }
-    // devolucion_tardia siempre 10 días
     if (tipo_infraccion === 'devolucion_tardia') {
       const f = new Date()
       f.setDate(f.getDate() + 10)
       fechaFinSuspension = f
       dias_suspension = 10
     }
+
+    // ── INSERT ────────────────────────────────────────────────────
 
     const { rows } = await client.query(
       `INSERT INTO sanciones (
@@ -467,6 +526,14 @@ const getSanctionsByLoan = async (id_prestamo) => {
 // tipo = otro            -> préstamos activo, pendiente_devolucion, vencido o
 //        devuelto que coincidan con la búsqueda, con al menos un ejemplar.
 const searchSanctionableLoans = async (search, tipo) => {
+  // Estados de préstamo permitidos según el tipo de infracción
+  const estadosPorTipo = {
+    falta_entrega:    ['vencido'],
+    devolucion_tardia: ['vencido', 'devuelto'],
+    deterioro:        ['activo', 'vencido', 'devuelto'],
+    perdida:          ['activo', 'vencido'],
+  }
+
   if (tipo === 'falta_entrega') {
     const { rows } = await pool.query(
       `SELECT
@@ -498,37 +565,53 @@ const searchSanctionableLoans = async (search, tipo) => {
     return rows
   }
 
+  const estados = estadosPorTipo[tipo]
+  if (!estados) return []
+
+  const placeholders = estados.map((_, i) => `$${i + 2}`).join(', ')
+
   const { rows } = await pool.query(
     `SELECT
-       p.id_prestamo,
-       p.fecha_solicitud,
-       p.fecha_tope_devolucion,
-       p.estado_prestamo,
-       u.id_usuario,
-       u.nombre_apellido,
-       u.correo,
-       u.ci,
-       COUNT(dp.id_ejemplar) AS total_ejemplares
-     FROM prestamos p
-     JOIN usuarios u ON p.id_usuario = u.id_usuario
-     JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
-     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido', 'devuelto')
-       AND (
-         u.nombre_apellido ILIKE $1 OR
-         u.correo ILIKE $1 OR
-         u.ci ILIKE $1
-       )
-     GROUP BY p.id_prestamo, u.id_usuario
-     HAVING COUNT(dp.id_ejemplar) > 0
-     ORDER BY p.fecha_tope_devolucion DESC`,
-    [`%${search}%`]
+      p.id_prestamo,
+      p.fecha_solicitud,
+      p.fecha_tope_devolucion,
+      p.estado_prestamo,
+      u.id_usuario,
+      u.nombre_apellido,
+      u.correo,
+      u.ci,
+      COUNT(dp.id_ejemplar) AS total_ejemplares
+    FROM prestamos p
+    JOIN usuarios u ON p.id_usuario = u.id_usuario
+    JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+    WHERE p.estado_prestamo IN (${placeholders})
+      AND (
+        u.nombre_apellido ILIKE $1 OR
+        u.correo ILIKE $1 OR
+        u.ci ILIKE $1
+      )
+      AND EXISTS (
+        SELECT 1 FROM detalles_prestamos dp2
+        WHERE dp2.id_prestamo = p.id_prestamo
+          AND NOT EXISTS (
+            SELECT 1 FROM sanciones s
+            WHERE s.id_prestamo = p.id_prestamo
+              AND s.id_ejemplar = dp2.id_ejemplar
+              AND s.tipo_infraccion = $${estados.length + 2}
+              AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
+          )
+      )
+    GROUP BY p.id_prestamo, u.id_usuario
+    HAVING COUNT(dp.id_ejemplar) > 0
+    ORDER BY p.fecha_tope_devolucion DESC`,
+    [`%${search}%`, ...estados, tipo]
   )
   return rows
 }
 
 // Préstamo con todos sus ejemplares — para elegir cuáles sancionar
 // (incluye estado_prestamo_ejemplar para mostrar contexto al admin)
-const getLoanWithEjemplaresForSanction = async (id_prestamo) => {
+const getLoanWithEjemplaresForSanction = async (id_prestamo, tipo_infraccion) => {
   const { rows: prestamo } = await pool.query(
     `SELECT
        p.*,
@@ -555,8 +638,15 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo) => {
      JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
      JOIN libros l ON e.id_libro = l.id_libro
      WHERE dp.id_prestamo = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM sanciones s
+         WHERE s.id_prestamo = $1
+           AND s.id_ejemplar = dp.id_ejemplar
+           AND s.tipo_infraccion = $2
+           AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
+       )
      ORDER BY dp.id_ejemplar ASC`,
-    [id_prestamo]
+    [id_prestamo, tipo_infraccion]
   )
 
   return { ...prestamo[0], ejemplares }
