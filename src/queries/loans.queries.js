@@ -693,20 +693,31 @@ const getLoanById = async (id_prestamo) => {
   if (prestamo.length === 0) return null
 
   const { rows: detalles } = await pool.query(
-    `SELECT
-       dp.id_ejemplar,
-       dp.estado_prestamo_ejemplar,
-       dp.observaciones,
-       dp.es_reserva,
-       e.estado_ejemplar,
-       l.titulo,
-       l.autor
-     FROM detalles_prestamos dp
-     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-     JOIN libros l ON e.id_libro = l.id_libro
-     WHERE dp.id_prestamo = $1`,
-    [id_prestamo]
-  )
+  `SELECT
+     dp.id_ejemplar,
+     dp.estado_prestamo_ejemplar,
+     dp.observaciones,
+     dp.es_reserva,
+     e.estado_ejemplar,
+     l.titulo,
+     l.autor,
+     d.fecha_devolucion
+
+   FROM detalles_prestamos dp
+
+   JOIN ejemplares e 
+   ON dp.id_ejemplar = e.id_ejemplar
+
+   JOIN libros l 
+   ON e.id_libro = l.id_libro
+
+   LEFT JOIN devoluciones d
+   ON d.id_prestamo = dp.id_prestamo
+   AND d.id_ejemplar = dp.id_ejemplar
+
+   WHERE dp.id_prestamo = $1`,
+  [id_prestamo]
+)
 
 const materiales = await getLoanMaterials(id_prestamo)
 
