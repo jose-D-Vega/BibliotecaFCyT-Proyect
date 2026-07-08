@@ -1,7 +1,7 @@
 const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial,
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
    getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario,
-  reassignReservation } = require('../queries/returns.queries')
+  reassignReservation, recuperarEjemplarPerdido, reemplazarEjemplarPerdido, } = require('../queries/returns.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
   try {
@@ -187,8 +187,48 @@ const getDevolucionesUsuarioHandler = async (req, res) => {
   }
 }
 
+const recuperarEjemplarPerdidoHandler = async (req, res) => {
+  try {
+    const { id_prestamo, id_ejemplar } = req.params
+    const { estado_devuelto, observaciones } = req.body
+    const id_bibliotecario = req.user.id_usuario
+
+    if (!estado_devuelto) {
+      return res.status(400).json({ error: 'El estado de devolución es requerido' })
+    }
+
+    const resultado = await recuperarEjemplarPerdido(
+      id_prestamo, id_ejemplar, id_bibliotecario,
+      { estado_devuelto, observaciones }
+    )
+    res.json({ message: 'Ejemplar recuperado registrado', data: resultado })
+  } catch (error) {
+    if (error.code === 'EJEMPLAR_NO_PERDIDO') {
+      return res.status(400).json({ error: error.message })
+    }
+    console.error('Error al recuperar ejemplar:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const reemplazarEjemplarPerdidoHandler = async (req, res) => {
+  try {
+    const { id_prestamo, id_ejemplar } = req.params
+    const id_bibliotecario = req.user.id_usuario
+
+    const resultado = await reemplazarEjemplarPerdido(id_prestamo, id_ejemplar, id_bibliotecario)
+    res.json({ message: 'Reemplazo registrado', data: resultado })
+  } catch (error) {
+    if (error.code === 'EJEMPLAR_NO_PERDIDO') {
+      return res.status(400).json({ error: error.message })
+    }
+    console.error('Error al registrar reemplazo:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = { searchLoansHandler, getAllActiveLoansHandler, 
   getLoanHandler, registerReturnHandler, 
   getHistorialHandler, getPrestamosConDevolucionesHandler, 
   getDetalleDevolucionesHandler, getDevolucionesUsuarioHandler,
-  resolveReservaAfectadaHandler }
+  resolveReservaAfectadaHandler, recuperarEjemplarPerdidoHandler, reemplazarEjemplarPerdidoHandler }

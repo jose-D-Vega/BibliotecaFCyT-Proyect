@@ -1,10 +1,10 @@
 const pool = require('../config/db')
 
-const crearNotificacion = async ({ id_usuario, tipo, titulo, mensaje, id_prestamo, id_sancion, rol_destino = 'normal', unica = false }) => {
-  // Si unica=true, evitar duplicar la misma notificación el mismo día.
-  // Se usa id_sancion como clave si está presente (más específico), si no, id_prestamo.
+const crearNotificacion = async ({ id_usuario, tipo, titulo, mensaje, id_prestamo, id_sancion, rol_destino = 'normal', unica = false }, client = null) => {
+  const executor = client || pool
+
   if (unica && (id_sancion || id_prestamo)) {
-    const { rows } = await pool.query(
+    const { rows } = await executor.query(
       id_sancion
         ? `SELECT id_notificacion FROM notificaciones
            WHERE id_usuario = $1 AND tipo = $2 AND id_sancion = $3 AND fecha::date = CURRENT_DATE`
@@ -12,10 +12,10 @@ const crearNotificacion = async ({ id_usuario, tipo, titulo, mensaje, id_prestam
            WHERE id_usuario = $1 AND tipo = $2 AND id_prestamo = $3 AND fecha::date = CURRENT_DATE`,
       [id_usuario, tipo, id_sancion || id_prestamo]
     )
-    if (rows.length > 0) return // ya existe, no duplicar
+    if (rows.length > 0) return
   }
 
-  await pool.query(
+  await executor.query(
     `INSERT INTO notificaciones (id_usuario, tipo, titulo, mensaje, id_prestamo, id_sancion, rol_destino)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [id_usuario, tipo, titulo, mensaje, id_prestamo || null, id_sancion || null, rol_destino]

@@ -6,7 +6,9 @@ const {
   resolveSanctionHandler, escalateSanctionHandler, getMySanctionsHandler,
   getSanctionsGroupedHandler, getSanctionsByLoanHandler,
   searchSanctionableLoansHandler, getLoanForSanctionHandler,
-  getSancionesComportamientoAgrupadasHandler, getSancionesComportamientoByUsuarioHandler
+  getSancionesComportamientoAgrupadasHandler, getSancionesComportamientoByUsuarioHandler,
+  getAllSanctionsByLoanHandler, getAllSancionesComportamientoByUsuarioHandler,
+  editSanctionHandler,
 } = require('../controllers/sanctions.controller')
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin, isBibliotecario } = require('../middlewares/roles')
@@ -17,6 +19,8 @@ router.get('/mis-sanciones', verifyToken, getMySanctionsHandler)
 // Admin — buscar préstamos sancionables y ver sus ejemplares (IMPORTANTE: antes de /:id)
 router.get('/buscar-prestamo', verifyToken, isAdmin, searchSanctionableLoansHandler)
 router.get('/prestamo/:id_prestamo/ejemplares', verifyToken, isAdmin, getLoanForSanctionHandler)
+router.get('/prestamo/:id_prestamo/todas', verifyToken, isAdmin, getAllSanctionsByLoanHandler)
+router.get('/comportamiento/usuario/:id_usuario/todas', verifyToken, isAdmin, getAllSancionesComportamientoByUsuarioHandler)
 
 // Admin y bibliotecario — consultar
 router.get('/agrupadas', verifyToken, isAdmin, getSanctionsGroupedHandler)
@@ -33,5 +37,6 @@ router.patch('/:id/escalar', verifyToken, isAdmin, escalateSanctionHandler)
 router.patch('/:id/desescalar', verifyToken, isAdmin, desescalateSanctionHandler)
 router.patch('/:id/confirmar', verifyToken, isAdmin, confirmSanctionHandler)
 router.patch('/:id/rechazar', verifyToken, isAdmin, rejectSanctionHandler)
+router.patch('/:id/editar', verifyToken, isAdmin, editSanctionHandler)
 
 module.exports = router

@@ -10,6 +10,8 @@ const verificarPrestamos = async () => {
     hoy.setHours(0, 0, 0, 0)
 
     // ---------- Solicitudes de renovación sin respuesta que superaron fecha_limite_respuesta --------
+    // El registro con estado 'solicitud_renovacion' es el de la renovación nueva (no el original).
+    // Cuando vence sin respuesta: la renovación pasa a 'rechazado' y el original a 'pendiente_devolucion'.
 
     const { rows: renovacionesVencidas } = await client.query(
       `SELECT * FROM prestamos
@@ -18,26 +20,34 @@ const verificarPrestamos = async () => {
       [hoy]
     )
 
-    for (const prestamo of renovacionesVencidas) {
+    for (const renovacion of renovacionesVencidas) {
       const fechaLimiteDev = new Date()
       fechaLimiteDev.setDate(fechaLimiteDev.getDate() + 2)
 
+      // Marcar la renovación como rechazada por vencimiento
+      await client.query(
+        `UPDATE prestamos SET estado_prestamo = 'rechazado'
+         WHERE id_prestamo = $1`,
+        [renovacion.id_prestamo]
+      )
+
+      // El préstamo original pasa a pendiente_devolucion con nueva fecha tope
       await client.query(
         `UPDATE prestamos
          SET estado_prestamo = 'pendiente_devolucion',
              fecha_tope_devolucion = $1
          WHERE id_prestamo = $2`,
-        [fechaLimiteDev, prestamo.id_prestamo]
+        [fechaLimiteDev, renovacion.id_prestamo_original]
       )
 
       await crearNotificacion({
-        id_usuario: prestamo.id_usuario,
+        id_usuario: renovacion.id_usuario,
         tipo: 'renovacion_vencida',
         titulo: 'Renovación sin respuesta',
         mensaje: `Tu solicitud de renovación no fue respondida a tiempo. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros.`,
-        id_prestamo: prestamo.id_prestamo,
+        id_prestamo: renovacion.id_prestamo_original,
         unica: true
-      })
+      }, client)
     }
 
     // -------------- Préstamos en pendiente_devolucion que superaron su nueva fecha tope ----------
@@ -70,35 +80,38 @@ const verificarPrestamos = async () => {
         mensaje: 'Tu préstamo ha vencido y has recibido una sanción. Acercate a la biblioteca para regularizar tu situación.',
         id_prestamo: prestamo.id_prestamo,
         unica: true
-      })
+      }, client)
     }
 
     // ------------ Préstamos activos vencidos sin solicitud de renovación pendiente -------------
+    // Excluye explícitamente los préstamos que tienen una renovación en curso,
+    // porque esos se manejan en la sección anterior cuando vence su fecha_limite_respuesta_renovacion.
 
     const { rows: activosVencidos } = await client.query(
-      `SELECT * FROM prestamos
-      WHERE estado_prestamo = 'activo'
-        AND fecha_tope_devolucion < $1`,
+      `SELECT p.* FROM prestamos p
+       WHERE p.estado_prestamo = 'activo'
+         AND p.fecha_tope_devolucion < $1
+         AND NOT EXISTS (
+           SELECT 1 FROM prestamos r
+           WHERE r.id_prestamo_original = p.id_prestamo
+             AND r.estado_prestamo = 'solicitud_renovacion'
+         )`,
       [hoy]
     )
 
     for (const prestamo of activosVencidos) {
-      // Marcar préstamo como vencido
       await client.query(
         `UPDATE prestamos SET estado_prestamo = 'vencido'
         WHERE id_prestamo = $1`,
         [prestamo.id_prestamo]
       )
 
-      // Bloquear usuario preventivamente
       await client.query(
         `UPDATE usuarios SET sancionado = true
         WHERE id_usuario = $1`,
         [prestamo.id_usuario]
       )
 
-      // Crear sanción en estado pendiente_confirmacion
-      // Verificar que no exista ya una sanción pendiente para este préstamo
       const { rows: sancionExistente } = await client.query(
         `SELECT id_sancion FROM sanciones
         WHERE id_prestamo = $1
@@ -114,14 +127,13 @@ const verificarPrestamos = async () => {
             descripcion_sancion, estado_sancion, fecha_sancion, fecha_limite
           )
           VALUES ($1, $2, 'falta_entrega',
-            'Préstamo vencido sin devolución del material', 
+            'Préstamo vencido sin devolución del material',
             'pendiente_confirmacion', CURRENT_DATE,
             CURRENT_DATE + INTERVAL '30 days')`,
           [prestamo.id_prestamo, prestamo.id_usuario]
         )
       }
 
-      // Notificar al usuario
       await crearNotificacion({
         id_usuario: prestamo.id_usuario,
         tipo: 'prestamo_vencido',
@@ -129,7 +141,7 @@ const verificarPrestamos = async () => {
         mensaje: 'No devolviste los materiales a tiempo. Tus servicios de biblioteca están suspendidos hasta que regularices tu situación.',
         id_prestamo: prestamo.id_prestamo,
         unica: true
-      })
+      }, client)
     }
 
     // Notificar a admins si hay préstamos vencidos
@@ -148,7 +160,7 @@ const verificarPrestamos = async () => {
           id_prestamo: null,
           rol_destino: 'admin',
           unica: true
-        })
+        }, client)
       }
     }
 
@@ -172,7 +184,7 @@ const verificarPrestamos = async () => {
         mensaje: 'Recordá devolver los libros mañana o solicitar una renovación antes de que venza el plazo.',
         id_prestamo: prestamo.id_prestamo,
         unica: true
-      })
+      }, client)
     }
 
     // Alertar a los admins sobre sanciones activas que superaron los 30 días.
@@ -206,8 +218,87 @@ const verificarPrestamos = async () => {
             id_sancion: sancion.id_sancion,
             rol_destino: 'admin',
             unica: true
-          })
+          }, client)
         }
+      }
+    }
+
+    // ------------ Resolución automática de sanciones por suspensión vencida ------------
+    // Aplica a: devolucion_tardia y comportamiento cuando fecha_fin_suspension <= hoy
+
+    const { rows: sancionesVencidaSuspension } = await client.query(
+      `SELECT s.*, u.nombre_apellido
+      FROM sanciones s
+      JOIN usuarios u ON s.id_usuario = u.id_usuario
+      WHERE s.estado_sancion IN ('activa', 'escalada')
+        AND s.tipo_infraccion IN ('devolucion_tardia', 'comportamiento')
+        AND s.fecha_fin_suspension IS NOT NULL
+        AND s.fecha_fin_suspension < $1`,
+      [hoy]
+    )
+
+    for (const sancion of sancionesVencidaSuspension) {
+      // Resolver la sanción
+      await client.query(
+        `UPDATE sanciones SET estado_sancion = 'resuelta'
+        WHERE id_sancion = $1`,
+        [sancion.id_sancion]
+      )
+
+      // Verificar si el usuario tiene otras sanciones activas antes de desbloquear
+      const { rows: otrasSanciones } = await client.query(
+        `SELECT COUNT(*) FROM sanciones
+        WHERE id_usuario = $1
+          AND estado_sancion IN ('activa', 'pendiente_confirmacion')
+          AND id_sancion != $2`,
+        [sancion.id_usuario, sancion.id_sancion]
+      )
+
+      const cuentaHabilitada = parseInt(otrasSanciones[0].count) === 0
+
+      if (cuentaHabilitada) {
+        await client.query(
+          `UPDATE usuarios SET sancionado = false WHERE id_usuario = $1`,
+          [sancion.id_usuario]
+        )
+      }
+
+      // Notificar al usuario
+      const tipoLabel = sancion.tipo_infraccion === 'devolucion_tardia'
+        ? 'devolución tardía'
+        : 'comportamiento inadecuado'
+
+      await crearNotificacion({
+        id_usuario: sancion.id_usuario,
+        tipo: 'sancion_resuelta',
+        titulo: 'Tu sanción fue resuelta',
+        mensaje: cuentaHabilitada
+          ? `Tu sanción por ${tipoLabel} ha concluido y tu cuenta ha sido habilitada nuevamente.`
+          : `Tu sanción por ${tipoLabel} ha concluido. Tenés otras sanciones activas pendientes de resolución.`,
+        id_prestamo: sancion.id_prestamo || null,
+        id_sancion: sancion.id_sancion,
+        unica: true
+      }, client)
+    }
+
+    // Notificar a admins si se resolvieron sanciones automáticamente
+    if (sancionesVencidaSuspension.length > 0) {
+      const { rows: admins } = await client.query(
+        `SELECT u.id_usuario FROM usuarios u
+        JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
+        WHERE t.nombre_tipo = 'admin' AND u.activo = true`
+      )
+
+      for (const admin of admins) {
+        await crearNotificacion({
+          id_usuario: admin.id_usuario,
+          tipo: 'sancion_resuelta',
+          titulo: 'Sanciones resueltas automáticamente',
+          mensaje: `${sancionesVencidaSuspension.length} sanción${sancionesVencidaSuspension.length > 1 ? 'es fueron resueltas' : ' fue resuelta'} automáticamente por vencimiento del período de suspensión.`,
+          id_prestamo: null,
+          rol_destino: 'admin',
+          unica: true
+        }, client)
       }
     }
 
@@ -226,8 +317,8 @@ const iniciarJob = () => {
   cron.schedule('0 * * * *', verificarPrestamos)
   console.log('Job de verificación de préstamos iniciado')
 
-  // Correr una vez al arrancar para no esperar la primera hora
-  verificarPrestamos()
+  // Esperar 5 segundos al arrancar para asegurar que la conexión a la DB esté lista
+  setTimeout(verificarPrestamos, 5000)
 }
 
 module.exports = { iniciarJob, verificarPrestamos }

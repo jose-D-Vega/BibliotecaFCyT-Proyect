@@ -10,6 +10,8 @@ const {
   getDetalleDevolucionesHandler,
   getDevolucionesUsuarioHandler,
   resolveReservaAfectadaHandler,
+  recuperarEjemplarPerdidoHandler, 
+  reemplazarEjemplarPerdidoHandler
 } = require("../controllers/returns.controller");
 const { verifyToken } = require("../middlewares/auth");
 const { isBibliotecario } = require("../middlewares/roles");
@@ -36,6 +38,16 @@ router.get(
   isBibliotecario,
   getDetalleDevolucionesHandler,
 );
+
+router.post(
+  '/prestamo/:id_prestamo/ejemplar/:id_ejemplar/recuperar', 
+  verifyToken, isBibliotecario, recuperarEjemplarPerdidoHandler
+)
+
+router.post(
+  '/prestamo/:id_prestamo/ejemplar/:id_ejemplar/reemplazar', 
+  verifyToken, isBibliotecario, reemplazarEjemplarPerdidoHandler
+)
 
 router.patch(
   '/prestamo/:id_prestamo/reserva-afectada/:id_ejemplar_anterior',

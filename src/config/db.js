@@ -7,6 +7,8 @@ const pool = new Pool({
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
+  keepAlive: true,              // mantiene conexiones vivas ante inactividad
+  keepAliveInitialDelayMillis: 10000,  // empieza keepAlive a los 10s de inactividad
 })
 
 pool.query('SELECT NOW()')

@@ -7,7 +7,8 @@ const {
   getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
   searchSanctionableLoans, getLoanWithEjemplaresForSanction,
   getSancionesComportamientoAgrupadas, countSancionesComportamientoAgrupadas,
-  getSancionesComportamientoByUsuario
+  getSancionesComportamientoByUsuario,
+  getAllSanctionsByLoan, getAllSancionesComportamientoByUsuario, editSanction
 } = require('../queries/sanctions.queries')
 
 const confirmSanctionHandler = async (req, res) => {
@@ -196,6 +197,16 @@ const getSanctionHandler = async (req, res) => {
 const resolveSanctionHandler = async (req, res) => {
   try {
     const { id } = req.params
+    const rol = req.user.rol?.toLowerCase()
+
+    // Verificar conflicto de interés antes de resolver
+    if (rol === 'bibliotecario') {
+      const sancionActual = await getSanctionById(id)
+      if (sancionActual && sancionActual.id_usuario === req.user.id_usuario) {
+        return res.status(403).json({ error: 'No podés resolver una sanción que está dirigida a vos mismo' })
+      }
+    }
+
     const sancion = await resolveSanction(id, req.user.id_usuario)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o ya resuelta' })
 
@@ -221,6 +232,9 @@ const resolveSanctionHandler = async (req, res) => {
 
     res.json({ message: 'Sanción resuelta exitosamente', data: sancion })
   } catch (error) {
+    if (error.code === 'EJEMPLAR_AUN_PERDIDO') {
+      return res.status(409).json({ error: error.message })
+    }
     console.error('Error al resolver sanción:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
@@ -241,6 +255,15 @@ const escalateSanctionHandler = async (req, res) => {
 const desescalateSanctionHandler = async (req, res) => {
   try {
     const { id } = req.params
+    const rol = req.user.rol?.toLowerCase()
+
+    if (rol === 'bibliotecario') {
+      const sancionActual = await getSanctionById(id)
+      if (sancionActual && sancionActual.id_usuario === req.user.id_usuario) {
+        return res.status(403).json({ error: 'No podés des-escalar una sanción que está dirigida a vos mismo' })
+      }
+    }
+
     const sancion = await desescalateSanction(id)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o no está escalada' })
     res.json({ message: 'Sanción revertida a estado activa', data: sancion })
@@ -285,7 +308,8 @@ const getSanctionsGroupedHandler = async (req, res) => {
 const getSanctionsByLoanHandler = async (req, res) => {
   try {
     const { id_prestamo } = req.params
-    const sanciones = await getSanctionsByLoan(id_prestamo)
+    const { estado } = req.query
+    const sanciones = await getSanctionsByLoan(id_prestamo, estado)
     res.json({ data: sanciones })
   } catch (error) {
     console.error('Error al obtener sanciones del préstamo:', error)
@@ -319,11 +343,7 @@ const getLoanForSanctionHandler = async (req, res) => {
     const { id_prestamo } = req.params
     const { tipo_infraccion } = req.query
 
-    if (!tipo_infraccion) {
-      return res.status(400).json({ error: 'El tipo de infracción es requerido' })
-    }
-
-    const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo, tipo_infraccion)
+    const prestamo = await getLoanWithEjemplaresForSanction(id_prestamo, tipo_infraccion || null)
     if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' })
     res.json({ data: prestamo })
   } catch (error) {
@@ -357,10 +377,51 @@ const getSancionesComportamientoAgrupadasHandler = async (req, res) => {
 const getSancionesComportamientoByUsuarioHandler = async (req, res) => {
   try {
     const { id_usuario } = req.params
-    const sanciones = await getSancionesComportamientoByUsuario(id_usuario)
+    const { estado } = req.query
+    const sanciones = await getSancionesComportamientoByUsuario(id_usuario, estado)
     res.json({ data: sanciones })
   } catch (error) {
-    console.error('Error al obtener sanciones de comportamiento del usuario:', error)
+    console.error('Error al obtener sanciones de comportamiento:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const getAllSanctionsByLoanHandler = async (req, res) => {
+  try {
+    const { id_prestamo } = req.params
+    const sanciones = await getAllSanctionsByLoan(id_prestamo)
+    res.json({ data: sanciones })
+  } catch (error) {
+    console.error('Error al obtener sanciones del préstamo:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const getAllSancionesComportamientoByUsuarioHandler = async (req, res) => {
+  try {
+    const { id_usuario } = req.params
+    const sanciones = await getAllSancionesComportamientoByUsuario(id_usuario)
+    res.json({ data: sanciones })
+  } catch (error) {
+    console.error('Error al obtener sanciones de comportamiento:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+const editSanctionHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { descripcion_sancion, dias_suspension } = req.body
+
+    const sancion = await editSanction(id, { descripcion_sancion, dias_suspension })
+    if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada' })
+
+    res.json({ message: 'Sanción actualizada', data: sancion })
+  } catch (error) {
+    if (error.code === 'SANCION_NO_EDITABLE') {
+      return res.status(400).json({ error: error.message })
+    }
+    console.error('Error al editar sanción:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
@@ -371,5 +432,7 @@ module.exports = {
   getSanctionsByLoanHandler, resolveSanctionHandler,
   escalateSanctionHandler, getMySanctionsHandler, desescalateSanctionHandler,
   searchSanctionableLoansHandler, getLoanForSanctionHandler,
-  getSancionesComportamientoAgrupadasHandler, getSancionesComportamientoByUsuarioHandler
+  getSancionesComportamientoAgrupadasHandler, getSancionesComportamientoByUsuarioHandler,
+  getAllSanctionsByLoanHandler, getAllSancionesComportamientoByUsuarioHandler,
+  editSanctionHandler,
 }

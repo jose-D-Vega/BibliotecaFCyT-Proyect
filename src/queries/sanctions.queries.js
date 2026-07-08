@@ -112,6 +112,36 @@ const createSanction = async ({
       [id_usuario]
     )
 
+    // Si es pérdida, actualizar el estado del ejemplar y descontar del libro
+    if (tipo_infraccion === 'perdida' && id_ejemplar) {
+      // Obtener id_libro del ejemplar
+      const { rows: ejemplarRows } = await client.query(
+        `UPDATE ejemplares
+        SET estado_ejemplar = 'perdido'
+        WHERE id_ejemplar = $1
+        RETURNING id_libro`,
+        [id_ejemplar]
+      )
+
+      if (ejemplarRows.length > 0) {
+        // Actualizar estado en detalles_prestamos
+        await client.query(
+          `UPDATE detalles_prestamos
+          SET estado_prestamo_ejemplar = 'perdido'
+          WHERE id_prestamo = $1 AND id_ejemplar = $2`,
+          [id_prestamo, id_ejemplar]
+        )
+
+        // Descontar cantidad_ejemplar del libro
+        await client.query(
+          `UPDATE libros
+          SET cantidad_ejemplar = GREATEST(cantidad_ejemplar - 1, 0)
+          WHERE id_libro = $1`,
+          [ejemplarRows[0].id_libro]
+        )
+      }
+    }
+
     await client.query('COMMIT')
     return rows[0]
   } catch (error) {
@@ -311,6 +341,31 @@ const resolveSanction = async (id_sancion, id_admin) => {
   try {
     await client.query('BEGIN')
 
+    const { rows: current } = await client.query(
+      `SELECT * FROM sanciones WHERE id_sancion = $1`,
+      [id_sancion]
+    )
+    if (current.length === 0) return null
+    const sanction = current[0]
+
+    // Validación especial para pérdida: el ejemplar debe haber sido devuelto o reemplazado
+    if (sanction.tipo_infraccion === 'perdida' && sanction.id_ejemplar && sanction.id_prestamo) {
+      const { rows: detalle } = await client.query(
+        `SELECT estado_prestamo_ejemplar FROM detalles_prestamos
+         WHERE id_prestamo = $1 AND id_ejemplar = $2`,
+        [sanction.id_prestamo, sanction.id_ejemplar]
+      )
+      if (detalle.length > 0 && detalle[0].estado_prestamo_ejemplar === 'perdido') {
+        await client.query('ROLLBACK')
+        const error = new Error(
+          'No se puede resolver esta sanción manualmente. El ejemplar aún figura como perdido. ' +
+          'Primero registrá la devolución o el reemplazo del material desde el historial de préstamos.'
+        )
+        error.code = 'EJEMPLAR_AUN_PERDIDO'
+        throw error
+      }
+    }
+
     const { rows: sancion } = await client.query(
       `UPDATE sanciones SET estado_sancion = 'resuelta'
        WHERE id_sancion = $1
@@ -496,16 +551,28 @@ const countSanctionsGrouped = async ({ estado }) => {
 }
 
 // Detalle de todas las sanciones de un préstamo
-const getSanctionsByLoan = async (id_prestamo) => {
+const getSanctionsByLoan = async (id_prestamo, estado) => {
+  // Construir el filtro de estado según la tab activa
+  let estadoFilter = ''
+  const params = [id_prestamo]
+
+  if (estado === 'activa') {
+    estadoFilter = `AND s.estado_sancion = 'activa'`
+  } else if (estado === 'escalada') {
+    estadoFilter = `AND s.estado_sancion = 'escalada'`
+  } else if (estado === 'resuelta,rechazada') {
+    estadoFilter = `AND s.estado_sancion IN ('resuelta', 'rechazada')`
+  }
+
   const { rows } = await pool.query(
     `SELECT
        s.*,
        u.nombre_apellido AS usuario_nombre,
-       u.correo AS usuario_correo,
-       u.ci AS usuario_ci,
+       u.correo         AS usuario_correo,
+       u.ci             AS usuario_ci,
        a.nombre_apellido AS admin_nombre,
-       l.titulo AS libro_titulo,
-       l.autor AS libro_autor,
+       l.titulo         AS libro_titulo,
+       l.autor          AS libro_autor,
        e.id_ejemplar
      FROM sanciones s
      JOIN usuarios u ON s.id_usuario = u.id_usuario
@@ -513,8 +580,9 @@ const getSanctionsByLoan = async (id_prestamo) => {
      LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
      WHERE s.id_prestamo = $1
+       ${estadoFilter}
      ORDER BY s.fecha_sancion ASC`,
-    [id_prestamo]
+    params
   )
   return rows
 }
@@ -626,28 +694,42 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo, tipo_infraccion) =>
 
   if (prestamo.length === 0) return null
 
-  const { rows: ejemplares } = await pool.query(
-    `SELECT
-       dp.id_ejemplar,
-       dp.estado_prestamo_ejemplar,
-       e.estado_ejemplar,
-       l.id_libro,
-       l.titulo,
-       l.autor
-     FROM detalles_prestamos dp
-     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-     JOIN libros l ON e.id_libro = l.id_libro
-     WHERE dp.id_prestamo = $1
-       AND NOT EXISTS (
-         SELECT 1 FROM sanciones s
-         WHERE s.id_prestamo = $1
-           AND s.id_ejemplar = dp.id_ejemplar
-           AND s.tipo_infraccion = $2
-           AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
-       )
-     ORDER BY dp.id_ejemplar ASC`,
-    [id_prestamo, tipo_infraccion]
-  )
+  // Si hay tipo_infraccion, filtrar ejemplares ya sancionados de ese tipo
+  const ejemplaresQuery = tipo_infraccion
+    ? `SELECT
+         dp.id_ejemplar,
+         dp.estado_prestamo_ejemplar,
+         e.estado_ejemplar,
+         l.id_libro,
+         l.titulo,
+         l.autor
+       FROM detalles_prestamos dp
+       JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+       JOIN libros l ON e.id_libro = l.id_libro
+       WHERE dp.id_prestamo = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM sanciones s
+           WHERE s.id_prestamo = $1
+             AND s.id_ejemplar = dp.id_ejemplar
+             AND s.tipo_infraccion = $2
+             AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
+         )
+       ORDER BY dp.id_ejemplar ASC`
+    : `SELECT
+         dp.id_ejemplar,
+         dp.estado_prestamo_ejemplar,
+         e.estado_ejemplar,
+         l.id_libro,
+         l.titulo,
+         l.autor
+       FROM detalles_prestamos dp
+       JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+       JOIN libros l ON e.id_libro = l.id_libro
+       WHERE dp.id_prestamo = $1
+       ORDER BY dp.id_ejemplar ASC`
+
+  const params = tipo_infraccion ? [id_prestamo, tipo_infraccion] : [id_prestamo]
+  const { rows: ejemplares } = await pool.query(ejemplaresQuery, params)
 
   return { ...prestamo[0], ejemplares }
 }
@@ -719,14 +801,66 @@ const countSancionesComportamientoAgrupadas = async ({ estado }) => {
 }
 
 // Todas las sanciones de comportamiento de un usuario — para el modal de detalle
-const getSancionesComportamientoByUsuario = async (id_usuario) => {
+const getSancionesComportamientoByUsuario = async (id_usuario, estado) => {
+  let estadoFilter = ''
+
+  if (estado === 'activa') {
+    estadoFilter = `AND s.estado_sancion = 'activa'`
+  } else if (estado === 'resuelta,rechazada') {
+    estadoFilter = `AND s.estado_sancion IN ('resuelta', 'rechazada')`
+  }
+
   const { rows } = await pool.query(
     `SELECT
        s.*,
        u.nombre_apellido AS usuario_nombre,
-       u.correo AS usuario_correo,
-       u.ci AS usuario_ci,
-       u.telefono AS usuario_telefono,
+       u.correo         AS usuario_correo,
+       u.ci             AS usuario_ci,
+       a.nombre_apellido AS admin_nombre
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     WHERE s.id_usuario = $1
+       AND s.tipo_infraccion = 'comportamiento'
+       ${estadoFilter}
+     ORDER BY s.fecha_sancion DESC`,
+    [id_usuario]
+  )
+  return rows
+}
+
+// Todas las sanciones de un préstamo sin filtro de estado — para la página de detalle
+const getAllSanctionsByLoan = async (id_prestamo) => {
+  const { rows } = await pool.query(
+    `SELECT
+       s.*,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo         AS usuario_correo,
+       u.ci             AS usuario_ci,
+       a.nombre_apellido AS admin_nombre,
+       l.titulo         AS libro_titulo,
+       l.autor          AS libro_autor,
+       e.id_ejemplar
+     FROM sanciones s
+     JOIN usuarios u ON s.id_usuario = u.id_usuario
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
+     LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
+     LEFT JOIN libros l ON e.id_libro = l.id_libro
+     WHERE s.id_prestamo = $1
+     ORDER BY s.fecha_sancion ASC`,
+    [id_prestamo]
+  )
+  return rows
+}
+
+// Todas las sanciones de comportamiento de un usuario sin filtro — para la página de detalle
+const getAllSancionesComportamientoByUsuario = async (id_usuario) => {
+  const { rows } = await pool.query(
+    `SELECT
+       s.*,
+       u.nombre_apellido AS usuario_nombre,
+       u.correo         AS usuario_correo,
+       u.ci             AS usuario_ci,
        a.nombre_apellido AS admin_nombre
      FROM sanciones s
      JOIN usuarios u ON s.id_usuario = u.id_usuario
@@ -739,13 +873,67 @@ const getSancionesComportamientoByUsuario = async (id_usuario) => {
   return rows
 }
 
+const editSanction = async (id_sancion, { descripcion_sancion, dias_suspension }) => {
+  // Traer la sanción actual para validar estado y recalcular fechas
+  const { rows: current } = await pool.query(
+    `SELECT * FROM sanciones WHERE id_sancion = $1`,
+    [id_sancion]
+  )
+  if (current.length === 0) return null
+
+  const sancion = current[0]
+
+  // Solo se pueden editar sanciones activas o escaladas
+  if (!['activa', 'escalada'].includes(sancion.estado_sancion)) {
+    const error = new Error('Solo se pueden editar sanciones activas o escaladas')
+    error.code = 'SANCION_NO_EDITABLE'
+    throw error
+  }
+
+  const updates = []
+  const params  = []
+  let paramIdx  = 1
+
+  if (descripcion_sancion !== undefined) {
+    updates.push(`descripcion_sancion = $${paramIdx++}`)
+    params.push(descripcion_sancion)
+  }
+
+  if (dias_suspension !== undefined) {
+    // Recalcular fecha_fin_suspension desde fecha_sancion original
+    let fechaFinSuspension = null
+    if (dias_suspension !== null) {
+      const base = new Date(sancion.fecha_sancion)
+      base.setDate(base.getDate() + parseInt(dias_suspension))
+      fechaFinSuspension = base
+    }
+    updates.push(`dias_suspension = $${paramIdx++}`)
+    updates.push(`fecha_fin_suspension = $${paramIdx++}`)
+    params.push(dias_suspension)
+    params.push(fechaFinSuspension)
+  }
+
+  if (updates.length === 0) return sancion
+
+  params.push(id_sancion)
+  const { rows } = await pool.query(
+    `UPDATE sanciones SET ${updates.join(', ')}
+     WHERE id_sancion = $${paramIdx}
+     RETURNING *`,
+    params
+  )
+  return rows[0]
+}
+
 module.exports = {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
   getSanctionsGroupedByLoan, countSanctionsGrouped, getSanctionsByLoan,
+  getAllSanctionsByLoan, 
   resolveSanction, escalateSanction, desescalateSanction,
   autoResolveFaltaEntrega, getMySanctions,
   searchSanctionableLoans, getLoanWithEjemplaresForSanction,
   getSancionesComportamientoAgrupadas, countSancionesComportamientoAgrupadas,
-  getSancionesComportamientoByUsuario
+  getSancionesComportamientoByUsuario,
+  getAllSancionesComportamientoByUsuario, editSanction
 }
