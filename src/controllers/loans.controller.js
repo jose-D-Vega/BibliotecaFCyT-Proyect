@@ -6,7 +6,9 @@ const {
   getLoans,
   countLoans,
   getLoanById,
-  renewLoan
+  renewLoan,
+  approveRenewal,
+  rejectRenewal
 } = require('../queries/loans.queries')
 
 const createLoanHandler = async (req, res) => {
@@ -210,56 +212,33 @@ const renewLoanHandler = async (req, res) => {
   }
 }
 
-const {
-  approveRenewal,
-  rejectRenewal
-} = require('../queries/loans.queries')
-
 const approveRenewalHandler = async (req, res) => {
   try {
     const { id } = req.params
+    const result = await approveRenewal(id, req.user.id_usuario)
 
-    const result = await approveRenewal(id)
+    if (!result) return res.status(404).json({ error: 'Renovación no encontrada' })
+    if (result.error) return res.status(400).json({ error: result.error })
 
-    if (!result) {
-      return res.status(404).json({ error: 'Préstamo no encontrado' })
-    }
-
-    if (result.error) {
-      return res.status(400).json({ error: result.error })
-    }
-
-    res.json({
-      message: "Renovación aprobada",
-      data: result
-    })
+    res.json({ message: 'Renovación aprobada exitosamente', data: result })
   } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: "Error interno" })
+    console.error('Error al aprobar renovación:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
 
 const rejectRenewalHandler = async (req, res) => {
   try {
     const { id } = req.params
+    const result = await rejectRenewal(id, req.user.id_usuario)
 
-    const result = await rejectRenewal(id)
+    if (!result) return res.status(404).json({ error: 'Renovación no encontrada' })
+    if (result.error) return res.status(400).json({ error: result.error })
 
-    if (!result) {
-      return res.status(404).json({ error: 'Préstamo no encontrado' })
-    }
-
-    if (result.error) {
-      return res.status(400).json({ error: result.error })
-    }
-
-    res.json({
-      message: "Renovación rechazada",
-      data: result
-    })
+    res.json({ message: 'Renovación rechazada', data: result })
   } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: "Error interno" })
+    console.error('Error al rechazar renovación:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
 

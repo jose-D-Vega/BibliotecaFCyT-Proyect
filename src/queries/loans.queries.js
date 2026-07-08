@@ -3,29 +3,31 @@ const pool = require('../config/db')
 const { crearNotificacion } = require('./notifications.queries')
 
 
-const _insertLoan = async (client, id_usuario, ejemplares, esReserva) => {
-  const estado = esReserva ? 'solicitud_reserva' : 'solicitado'
+const _insertLoan = async (client, id_usuario, ejemplares, esReserva, idPrestamoOriginal = null, numeroRenovacion = 0, fechaLimiteRespuesta = null) => {
+  const esRenovacion = idPrestamoOriginal !== null
+  const estado = esRenovacion ? 'solicitud_renovacion' : (esReserva ? 'solicitud_reserva' : 'solicitado')
 
-   // fecha_tope_devolucion es NOT NULL en la BD pero se asigna realmente
-  // al activar el préstamo — usamos un placeholder de 30 días
   const fechaPlaceholder = new Date()
   fechaPlaceholder.setDate(fechaPlaceholder.getDate() + 30)
 
   const { rows: prestamo } = await client.query(
-    `INSERT INTO prestamos (fecha_solicitud, fecha_tope_devolucion, estado_prestamo, id_usuario, es_reserva)
-     VALUES (NOW(), $1, $2, $3, $4)
+    `INSERT INTO prestamos (fecha_solicitud, fecha_tope_devolucion, estado_prestamo, id_usuario, es_reserva, id_prestamo_original, numero_renovacion, fecha_limite_respuesta_renovacion)
+     VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [fechaPlaceholder, estado, id_usuario, esReserva]
+    [fechaPlaceholder, estado, id_usuario, esReserva, idPrestamoOriginal, numeroRenovacion, fechaLimiteRespuesta]
   )
 
   const id_prestamo = prestamo[0].id_prestamo
 
-  for (const id_ejemplar of ejemplares) {
-    await client.query(
-      `INSERT INTO detalles_prestamos (id_prestamo, id_ejemplar, observaciones, estado_prestamo_ejemplar, es_reserva)
-       VALUES ($1, $2, '', 'solicitado', $3)`,
-      [id_prestamo, id_ejemplar, esReserva]
-    )
+  // Una renovación no tiene detalles_prestamos propios: se heredan del id_prestamo_original
+  if (!esRenovacion) {
+    for (const id_ejemplar of ejemplares) {
+      await client.query(
+        `INSERT INTO detalles_prestamos (id_prestamo, id_ejemplar, observaciones, estado_prestamo_ejemplar, es_reserva)
+         VALUES ($1, $2, '', 'solicitado', $3)`,
+        [id_prestamo, id_ejemplar, esReserva]
+      )
+    }
   }
 
   return prestamo[0]
@@ -115,19 +117,21 @@ const createLoan = async (id_usuario, itemsCarrito) => {
   }
 }
 
-// Respuesta del bibliotecario — aprueba o rechaza ejemplar por ejemplar
+// Respuesta del bibliotecario — aprueba o rechaza ejemplar por ejemplar.
+// Esta función solo maneja préstamos y reservas comunes.
+// Las renovaciones se responden con approveRenewal / rejectRenewal.
 const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_bibliotecario, observaciones) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
-    // Actualizar el detalle
+    // Actualizar el detalle del ejemplar respondido
     const { rows: detalle } = await client.query(
       `UPDATE detalles_prestamos
-      SET estado_prestamo_ejemplar = $1,
-      observaciones = $4
-      WHERE id_prestamo = $2 AND id_ejemplar = $3
-      RETURNING *`,
+       SET estado_prestamo_ejemplar = $1,
+           observaciones = $4
+       WHERE id_prestamo = $2 AND id_ejemplar = $3
+       RETURNING *`,
       [estado, id_prestamo, id_ejemplar, observaciones || '']
     )
 
@@ -147,104 +151,57 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
     const todosAprobados = estados.every(e => e === 'aprobado')
     const todosRechazados = estados.every(e => e === 'rechazado')
 
-    // Calcular estado final considerando renovaciones
-    let nuevoEstado
     const { rows: prestamoData } = await client.query(
       `SELECT * FROM prestamos WHERE id_prestamo = $1`,
       [id_prestamo]
     )
+
     const esReserva = prestamoData[0].es_reserva
-    const esRenovacion = prestamoData[0].numero_renovacion > 0 ||
-      prestamoData[0].id_prestamo_original !== null
-
-    // Una reserva pasa por dos rondas: 1) aprobar/rechazar la solicitud de reserva,
-    // 2) una vez que ya están todos los materiales disponibles, decidir la entrega final
-    // (en esa segunda ronda se comporta como un préstamo común: aprobado/parcial/rechazado)
     const estadoActual = prestamoData[0].estado_prestamo
-    const reservaEnRondaFinal = esReserva && ['reserva_aprobada', 'reserva_parcialmente_aprobada'].includes(estadoActual)
 
+    // Si se está aprobando, verificar que el usuario del préstamo no esté sancionado
+    if (estado === 'aprobado') {
+      const { rows: usuarioData } = await client.query(
+        `SELECT sancionado FROM usuarios WHERE id_usuario = $1`,
+        [prestamoData[0].id_usuario]
+      )
+      if (usuarioData[0]?.sancionado) {
+        await client.query('ROLLBACK')
+        return { error: 'El usuario tiene sanciones activas. No se puede aprobar el préstamo hasta que regularice su situación.' }
+      }
+    }
+
+    // Una reserva pasa por dos rondas:
+    // Ronda 1 — admin decide si aprueba la solicitud (solicitud_reserva → reserva_aprobada/parcial/rechazada)
+    // Ronda 2 — cuando ya están todos los materiales disponibles, admin decide la entrega final
+    //           (reserva_aprobada/parcial → aprobado/parcialmente_aprobado/rechazado → ciclo normal)
+    const reservaEnRondaFinal = esReserva &&
+      ['reserva_aprobada', 'reserva_parcialmente_aprobada'].includes(estadoActual)
+
+    let nuevoEstado
     if (todosAprobados) {
       if (esReserva && !reservaEnRondaFinal) nuevoEstado = 'reserva_aprobada'
-      else if (esRenovacion) nuevoEstado = 'renovado' // ← directo a renovado
       else nuevoEstado = 'aprobado'
     } else if (todosRechazados) {
-      const hoy = new Date()
-      const fechaTope = new Date(prestamoData[0].fecha_tope_devolucion)
-      const vencido = hoy > fechaTope
-
-      // Si es renovación rechazada y ya venció → pendiente_devolucion directo
-      if (esRenovacion && vencido) nuevoEstado = 'pendiente_devolucion'
+      if (esReserva && !reservaEnRondaFinal) nuevoEstado = 'reserva_rechazada'
       else nuevoEstado = 'rechazado'
     } else {
       nuevoEstado = (esReserva && !reservaEnRondaFinal) ? 'reserva_parcialmente_aprobada' : 'parcialmente_aprobado'
     }
 
-    // Un solo UPDATE con el estado final correcto
     const { rows: prestamo_actualizado } = await client.query(
       `UPDATE prestamos
-      SET estado_prestamo = $1::varchar,
-          fecha_respuesta = NOW(),
-          id_bibliotecario = $2,
-          fecha_tope_devolucion = CASE
-            WHEN $1::varchar = 'pendiente_devolucion' THEN $4
-            ELSE fecha_tope_devolucion
-          END
-      WHERE id_prestamo = $3
-      RETURNING *`,
-      [nuevoEstado, id_bibliotecario, id_prestamo,
-      (() => { const d = new Date(); d.setDate(d.getDate() + 2); return d })()]
+       SET estado_prestamo = $1::varchar,
+           fecha_respuesta = NOW(),
+           id_bibliotecario = $2
+       WHERE id_prestamo = $3
+       RETURNING *`,
+      [nuevoEstado, id_bibliotecario, id_prestamo]
     )
 
-    // Activar nuevo préstamo si es renovación aprobada
-    if (nuevoEstado === 'renovado') {
-      const nuevaFechaTope = new Date()
-      nuevaFechaTope.setDate(nuevaFechaTope.getDate() + 5)
-
-      const id_original = prestamoData[0].id_prestamo_original || id_prestamo
-      const { rows: nuevoPrestamo } = await client.query(
-        `UPDATE prestamos
-        SET estado_prestamo = 'activo',
-            fecha_activacion = NOW(),
-            fecha_tope_devolucion = $1,
-            id_bibliotecario = $2,
-            fecha_respuesta = NOW()
-        WHERE id_prestamo_original = $3
-          AND estado_prestamo = 'solicitado'
-        RETURNING *`,
-        [nuevaFechaTope, id_bibliotecario, id_original]
-      )
-
-      if (nuevoPrestamo.length > 0) {
-        await client.query(
-          `UPDATE detalles_prestamos SET estado_prestamo_ejemplar = 'activo'
-          WHERE id_prestamo = $1`,
-          [nuevoPrestamo[0].id_prestamo]
-        )
-        await crearNotificacion({
-          id_usuario: prestamoData[0].id_usuario,
-          tipo: 'renovacion_aprobada',
-          titulo: 'Renovación aprobada',
-          mensaje: `Tu solicitud de renovación fue aprobada. Tenés hasta el ${nuevaFechaTope.toLocaleDateString('es-PY')} para devolver los libros.`,
-          id_prestamo: nuevoPrestamo[0].id_prestamo
-        })
-      }
-    }
-
-    // Notificar si quedó en pendiente_devolucion
-    if (nuevoEstado === 'pendiente_devolucion') {
-      const fechaLimiteDev = new Date()
-      fechaLimiteDev.setDate(fechaLimiteDev.getDate() + 2)
-      await crearNotificacion({
-        id_usuario: prestamoData[0].id_usuario,
-        tipo: 'renovacion_rechazada',
-        titulo: 'Renovación rechazada',
-        mensaje: `Tu solicitud de renovación fue rechazada. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros antes de recibir una sanción.`,
-        id_prestamo
-      })
-    }
-
-    // Notificar aprobación / rechazo / aprobación parcial
-    if (esReserva) {
+    // --- Notificaciones ---
+    if (esReserva && !reservaEnRondaFinal) {
+      // Ronda 1: respuesta a solicitud de reserva
       if (nuevoEstado === 'reserva_aprobada') {
         await crearNotificacion({
           id_usuario: prestamoData[0].id_usuario,
@@ -261,8 +218,18 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
           mensaje: 'Parte de tu solicitud de reserva fue aprobada. Te avisaremos cuando los materiales aceptados estén disponibles para retirar.',
           id_prestamo
         })
-      } else if (nuevoEstado === 'aprobado') {
-        // Ronda final: ya estaban todos los materiales disponibles, el admin confirmó la entrega
+      } else if (nuevoEstado === 'reserva_rechazada') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'reserva_rechazada',
+          titulo: 'Reserva rechazada',
+          mensaje: 'Tu solicitud de reserva fue rechazada.',
+          id_prestamo
+        })
+      }
+    } else if (esReserva && reservaEnRondaFinal) {
+      // Ronda 2: admin confirma la entrega de la reserva ya lista
+      if (nuevoEstado === 'aprobado') {
         await crearNotificacion({
           id_usuario: prestamoData[0].id_usuario,
           tipo: 'reserva_disponible',
@@ -283,42 +250,37 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
           id_usuario: prestamoData[0].id_usuario,
           tipo: 'reserva_rechazada',
           titulo: 'Reserva rechazada',
-          mensaje: 'Tu solicitud de reserva fue rechazada.',
+          mensaje: 'Tu reserva fue rechazada en la instancia final.',
           id_prestamo
         })
       }
-    } else if (esRenovacion && nuevoEstado === 'rechazado') {
-      await crearNotificacion({
-        id_usuario: prestamoData[0].id_usuario,
-        tipo: 'renovacion_rechazada',
-        titulo: 'Renovación rechazada',
-        mensaje: 'Tu solicitud de renovación fue rechazada.',
-        id_prestamo
-      })
-    } else if (nuevoEstado === 'aprobado') {
-      await crearNotificacion({
-        id_usuario: prestamoData[0].id_usuario,
-        tipo: 'prestamo_aprobado',
-        titulo: 'Préstamo aprobado',
-        mensaje: 'Tu solicitud de préstamo fue aprobada. Acercate a la biblioteca a retirar los materiales.',
-        id_prestamo
-      })
-    } else if (nuevoEstado === 'parcialmente_aprobado') {
-      await crearNotificacion({
-        id_usuario: prestamoData[0].id_usuario,
-        tipo: 'prestamo_parcial',
-        titulo: 'Préstamo parcialmente aprobado',
-        mensaje: 'Parte de tu solicitud de préstamo fue aprobada. Revisá el detalle para ver qué materiales fueron aceptados.',
-        id_prestamo
-      })
-    } else if (nuevoEstado === 'rechazado') {
-      await crearNotificacion({
-        id_usuario: prestamoData[0].id_usuario,
-        tipo: 'prestamo_rechazado',
-        titulo: 'Préstamo rechazado',
-        mensaje: 'Tu solicitud de préstamo fue rechazada.',
-        id_prestamo
-      })
+    } else {
+      // Préstamo común (no reserva)
+      if (nuevoEstado === 'aprobado') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'prestamo_aprobado',
+          titulo: 'Préstamo aprobado',
+          mensaje: 'Tu solicitud de préstamo fue aprobada. Acercate a la biblioteca a retirar los materiales.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'parcialmente_aprobado') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'prestamo_parcial',
+          titulo: 'Préstamo parcialmente aprobado',
+          mensaje: 'Parte de tu solicitud de préstamo fue aprobada. Revisá el detalle para ver qué materiales fueron aceptados.',
+          id_prestamo
+        })
+      } else if (nuevoEstado === 'rechazado') {
+        await crearNotificacion({
+          id_usuario: prestamoData[0].id_usuario,
+          tipo: 'prestamo_rechazado',
+          titulo: 'Préstamo rechazado',
+          mensaje: 'Tu solicitud de préstamo fue rechazada.',
+          id_prestamo
+        })
+      }
     }
 
     await client.query('COMMIT')
@@ -352,6 +314,16 @@ const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
     if (!estadosValidos.includes(prestamo[0].estado_prestamo)) {
       await client.query('ROLLBACK')
       return { error: `El préstamo no puede activarse desde el estado: ${prestamo[0].estado_prestamo}` }
+    }
+
+    // Verificar que el usuario no esté sancionado al momento de activar
+    const { rows: usuarioData } = await client.query(
+      `SELECT sancionado FROM usuarios WHERE id_usuario = $1`,
+      [prestamo[0].id_usuario]
+    )
+    if (usuarioData[0]?.sancionado) {
+      await client.query('ROLLBACK')
+      return { error: 'El usuario tiene sanciones activas. No se puede activar el préstamo hasta que regularice su situación.' }
     }
 
     // Calcular fecha tope — 5 días desde hoy
@@ -576,6 +548,10 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
   let paramIndex = 1
   let whereClause = 'WHERE 1=1'
 
+  // Excluir préstamos en estado 'renovado' — son reemplazados visualmente
+  // por el registro de la renovación que los sucedió
+  whereClause += ` AND p.estado_prestamo != 'renovado'`
+
   if (id_usuario) {
     whereClause += ` AND p.id_usuario = $${paramIndex}`
     values.push(id_usuario)
@@ -607,9 +583,35 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
 
   const { rows } = await pool.query(
     `SELECT
-       p.*,
+       p.id_prestamo,
+       p.id_prestamo_original,
+       p.numero_renovacion,
+       p.estado_prestamo,
+       p.es_reserva,
+       p.id_usuario,
+       p.id_bibliotecario,
+       p.id_bibliotecario_activacion,
+       p.fecha_cancelacion,
+       p.fecha_limite_respuesta_renovacion,
+
+       -- Fechas del préstamo original cuando existe (solicitud, aprobación y activación
+       -- siempre corresponden al préstamo raíz; la renovación agrega su propia fecha)
+       COALESCE(orig.fecha_solicitud, p.fecha_solicitud)   AS fecha_solicitud,
+       COALESCE(orig.fecha_respuesta, p.fecha_respuesta)   AS fecha_respuesta,
+       COALESCE(orig.fecha_activacion, p.fecha_activacion) AS fecha_activacion,
+
+       -- Fecha tope siempre del registro actual (es la vigente)
+       p.fecha_tope_devolucion,
+
+       -- Fecha en que SE APROBÓ esta renovación (null si no es renovación o aún no aprobada)
+       CASE WHEN p.id_prestamo_original IS NOT NULL
+         THEN p.fecha_activacion
+         ELSE NULL
+       END AS fecha_renovacion,
+
        u.nombre_apellido,
        u.correo,
+
        COALESCE(
          JSON_AGG(
            JSON_BUILD_OBJECT(
@@ -625,13 +627,29 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
          '[]'
        ) AS detalles,
        COUNT(dp.id_ejemplar) AS total_ejemplares
+
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
-     LEFT JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+
+     -- Para renovaciones: obtener las fechas del préstamo raíz
+     LEFT JOIN prestamos orig ON p.id_prestamo_original = orig.id_prestamo
+
+     -- Para detalles: las renovaciones no tienen propios, heredan del original
+     LEFT JOIN detalles_prestamos dp
+       ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
      LEFT JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
+
      ${whereClause}
-     GROUP BY p.id_prestamo, u.nombre_apellido, u.correo
+     GROUP BY
+       p.id_prestamo, p.id_prestamo_original, p.numero_renovacion,
+       p.estado_prestamo, p.es_reserva, p.id_usuario,
+       p.id_bibliotecario, p.id_bibliotecario_activacion,
+       p.fecha_cancelacion, p.fecha_limite_respuesta_renovacion,
+       p.fecha_solicitud, p.fecha_respuesta, p.fecha_activacion,
+       p.fecha_tope_devolucion,
+       orig.fecha_solicitud, orig.fecha_respuesta, orig.fecha_activacion,
+       u.nombre_apellido, u.correo
      ORDER BY p.fecha_solicitud DESC
      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
     values
@@ -642,7 +660,7 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
 const countLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
+  let whereClause = `WHERE estado_prestamo != 'renovado'`
 
   if (id_usuario) {
     whereClause += ` AND id_usuario = $${paramIndex}`
@@ -693,20 +711,31 @@ const getLoanById = async (id_prestamo) => {
   if (prestamo.length === 0) return null
 
   const { rows: detalles } = await pool.query(
-    `SELECT
-       dp.id_ejemplar,
-       dp.estado_prestamo_ejemplar,
-       dp.observaciones,
-       dp.es_reserva,
-       e.estado_ejemplar,
-       l.titulo,
-       l.autor
-     FROM detalles_prestamos dp
-     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-     JOIN libros l ON e.id_libro = l.id_libro
-     WHERE dp.id_prestamo = $1`,
-    [id_prestamo]
-  )
+  `SELECT
+     dp.id_ejemplar,
+     dp.estado_prestamo_ejemplar,
+     dp.observaciones,
+     dp.es_reserva,
+     e.estado_ejemplar,
+     l.titulo,
+     l.autor,
+     d.fecha_devolucion
+
+   FROM detalles_prestamos dp
+
+   JOIN ejemplares e 
+   ON dp.id_ejemplar = e.id_ejemplar
+
+   JOIN libros l 
+   ON e.id_libro = l.id_libro
+
+   LEFT JOIN devoluciones d
+   ON d.id_prestamo = dp.id_prestamo
+   AND d.id_ejemplar = dp.id_ejemplar
+
+   WHERE dp.id_prestamo = $1`,
+  [id_prestamo]
+)
 
 const materiales = await getLoanMaterials(id_prestamo)
 
@@ -753,21 +782,24 @@ const renewLoan = async (id_prestamo, id_usuario) => {
       return { error: `Solo podés solicitar renovación cuando falte 1 día o menos para el vencimiento. Faltan ${diasRestantes} días.` }
     }
 
-    // Determinar préstamo original
-    const id_original = prestamo[0].id_prestamo_original || prestamo[0].id_prestamo
+    // Determinar préstamo original (si esto ya es una renovación activa, el original es el suyo;
+    // si es la primera renovación, el original es él mismo)
+    const id_original =  prestamo[0].id_prestamo_original || prestamo[0].id_prestamo
 
-    // Contar renovaciones
+    // Contar renovaciones ya hechas sobre ese original
     const { rows: renovaciones } = await client.query(
       `SELECT COUNT(*) FROM prestamos WHERE id_prestamo_original = $1`,
       [id_original]
     )
 
-    if (parseInt(renovaciones[0].count) >= 3) {
+    const totalRenovaciones = parseInt(renovaciones[0].count)
+
+    if (totalRenovaciones >= 3) {
       await client.query('ROLLBACK')
       return { error: 'Este préstamo ya alcanzó el límite de 3 renovaciones' }
     }
 
-    // Verificar ejemplares reservados
+    // Verificar que ningún ejemplar del préstamo tenga una reserva esperándolo
     const { rows: reservados } = await client.query(
       `SELECT e.id_ejemplar FROM ejemplares e
        JOIN detalles_prestamos dp ON e.id_ejemplar = dp.id_ejemplar
@@ -786,24 +818,26 @@ const renewLoan = async (id_prestamo, id_usuario) => {
     const fechaLimiteRespuesta = new Date(fechaTope)
     fechaLimiteRespuesta.setDate(fechaLimiteRespuesta.getDate() + 2)
 
-    // Cambiar estado del préstamo actual
-    await client.query(
-      `UPDATE prestamos
-       SET estado_prestamo = 'solicitud_renovacion',
-           fecha_limite_respuesta_renovacion = $1
-       WHERE id_prestamo = $2`,
-      [fechaLimiteRespuesta, id_prestamo]
-    )
+    // El préstamo original PERMANECE en 'activo' — no cambia de estado.
+    // La existencia de un registro de renovación con estado 'solicitud_renovacion'
+    // y fecha_limite_respuesta_renovacion es suficiente para saber que hay una
+    // solicitud pendiente. No hace falta (ni es correcto) cambiar el original.
 
-    // Obtener ejemplares activos
-    const { rows: detalles } = await client.query(
-      `SELECT id_ejemplar FROM detalles_prestamos
-       WHERE id_prestamo = $1 AND estado_prestamo_ejemplar = 'activo'`,
-      [id_prestamo]
+    // Crear el registro de la renovación — sin detalles_prestamos propios,
+    // se heredan del id_prestamo_original. Todo dentro de la misma transacción.
+    const nuevoPrestamo = await _insertLoan(
+      client,
+      id_usuario,
+      [],
+      false,
+      id_original,
+      totalRenovaciones + 1,
+      fechaLimiteRespuesta
     )
 
     await client.query('COMMIT')
 
+    // Avisar a los admins — fuera de la transacción, ya confirmada
     const { rows: admins } = await pool.query(
       `SELECT u.id_usuario FROM usuarios u
        JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
@@ -821,18 +855,6 @@ const renewLoan = async (id_prestamo, id_usuario) => {
       })
     }
 
-    const ejemplares = detalles.map(d => d.id_ejemplar)
-    const totalRenovaciones = parseInt(renovaciones[0].count)
-
-    const nuevoPrestamo = await _insertLoan(
-      await pool.connect(),
-      id_usuario,
-      ejemplares,
-      false,
-      id_original,
-      totalRenovaciones + 1
-    )
-
     return {
       prestamo_original: id_prestamo,
       nuevo_prestamo: nuevoPrestamo,
@@ -847,53 +869,148 @@ const renewLoan = async (id_prestamo, id_usuario) => {
   }
 }
 
-const approveRenewal = async (id_prestamo) => {
+const approveRenewal = async (id_renovacion, id_bibliotecario) => {
   const client = await pool.connect()
-
   try {
     await client.query('BEGIN')
 
-    // calcular nueva fecha
-    const nuevaFecha = new Date()
-    nuevaFecha.setDate(nuevaFecha.getDate() + 5)
+    // Verificar que el registro es una renovación en estado correcto
+    const { rows: renovacion } = await client.query(
+      `SELECT * FROM prestamos
+       WHERE id_prestamo = $1
+         AND estado_prestamo = 'solicitud_renovacion'
+         AND id_prestamo_original IS NOT NULL`,
+      [id_renovacion]
+    )
 
-    // actualizar SOLO el préstamo existente
-    const { rows } = await client.query(
-      `
-      UPDATE prestamos
-      SET fecha_tope_devolucion = $1,
-          estado_prestamo = 'activo',
-          fecha_respuesta = NOW()
-      WHERE id_prestamo = $2
-      RETURNING *
-      `,
-      [nuevaFecha, id_prestamo]
+    if (renovacion.length === 0) {
+      await client.query('ROLLBACK')
+      return { error: 'Renovación no encontrada o ya procesada' }
+    }
+
+    const id_original = renovacion[0].id_prestamo_original
+    const id_usuario = renovacion[0].id_usuario
+
+    // Verificar que el usuario no esté sancionado
+    const { rows: usuarioData } = await client.query(
+      `SELECT sancionado FROM usuarios WHERE id_usuario = $1`,
+      [id_usuario]
+    )
+    if (usuarioData[0]?.sancionado) {
+      await client.query('ROLLBACK')
+      return { error: 'El usuario tiene sanciones activas. No se puede aprobar la renovación hasta que regularice su situación.' }
+    }
+
+    // El préstamo original pasa a 'renovado' — ya no es el registro activo
+    await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = 'renovado',
+           fecha_respuesta = NOW(),
+           id_bibliotecario = $1
+       WHERE id_prestamo = $2`,
+      [id_bibliotecario, id_original] // ################## Aquí solo debería actualizarce estado_prestamo
+    )
+
+    // La renovación pasa a 'activo' con todos los datos de activación
+    const nuevaFechaTope = new Date()
+    nuevaFechaTope.setDate(nuevaFechaTope.getDate() + 5)
+
+    const { rows: renovacionActiva } = await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = 'activo',
+           fecha_respuesta = NOW(),
+           fecha_activacion = NOW(),
+           fecha_tope_devolucion = $1,
+           id_bibliotecario = $2,
+           id_bibliotecario_activacion = $2
+       WHERE id_prestamo = $3
+       RETURNING *`,
+      [nuevaFechaTope, id_bibliotecario, id_renovacion]
     )
 
     await client.query('COMMIT')
 
-    return rows[0]
-  } catch (err) {
+    await crearNotificacion({
+      id_usuario,
+      tipo: 'renovacion_aprobada',
+      titulo: 'Renovación aprobada',
+      mensaje: `Tu solicitud de renovación fue aprobada. Tenés hasta el ${nuevaFechaTope.toLocaleDateString('es-PY')} para devolver los libros.`,
+      id_prestamo: id_renovacion
+    })
+
+    return renovacionActiva[0]
+  } catch (error) {
     await client.query('ROLLBACK')
-    throw err
+    throw error
   } finally {
     client.release()
   }
 }
 
-const rejectRenewal = async (id_prestamo) => {
-  const { rows } = await pool.query(
-    `
-    UPDATE prestamos
-    SET estado_prestamo = 'activo',
-        fecha_respuesta = NOW()
-    WHERE id_prestamo = $1
-    RETURNING *
-    `,
-    [id_prestamo]
-  )
+const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
 
-  return rows[0]
+    // Verificar que el registro es una renovación en estado correcto
+    const { rows: renovacion } = await client.query(
+      `SELECT * FROM prestamos
+       WHERE id_prestamo = $1
+         AND estado_prestamo = 'solicitud_renovacion'
+         AND id_prestamo_original IS NOT NULL`,
+      [id_renovacion]
+    )
+
+    if (renovacion.length === 0) {
+      await client.query('ROLLBACK')
+      return { error: 'Renovación no encontrada o ya procesada' }
+    }
+
+    const id_original = renovacion[0].id_prestamo_original
+    const id_usuario = renovacion[0].id_usuario
+
+    // La renovación queda como rechazada
+    await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = 'rechazado',
+           fecha_respuesta = NOW(),
+           id_bibliotecario = $1
+       WHERE id_prestamo = $2`,
+      [id_bibliotecario, id_renovacion]
+    )
+
+    // El original pasa a pendiente_devolucion con 2 días de gracia
+    const fechaLimiteDev = new Date()
+    fechaLimiteDev.setDate(fechaLimiteDev.getDate() + 2)
+
+    const { rows: originalActualizado } = await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = 'pendiente_devolucion',
+           fecha_tope_devolucion = $1,
+           fecha_respuesta = NOW(),
+           id_bibliotecario = $2
+       WHERE id_prestamo = $3
+       RETURNING *`,
+      [fechaLimiteDev, id_bibliotecario, id_original]
+    )
+
+    await client.query('COMMIT')
+
+    await crearNotificacion({
+      id_usuario,
+      tipo: 'renovacion_rechazada',
+      titulo: 'Renovación rechazada',
+      mensaje: `Tu solicitud de renovación fue rechazada. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros antes de recibir una sanción.`,
+      id_prestamo: id_original
+    })
+
+    return originalActualizado[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 module.exports = {
