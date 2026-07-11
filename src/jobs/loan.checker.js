@@ -24,20 +24,23 @@ const verificarPrestamos = async () => {
       const fechaLimiteDev = new Date()
       fechaLimiteDev.setDate(fechaLimiteDev.getDate() + 2)
 
-      // Marcar la renovación como rechazada por vencimiento
+      // La solicitud de renovación queda como rechazada por vencimiento
       await client.query(
         `UPDATE prestamos SET estado_prestamo = 'rechazado'
          WHERE id_prestamo = $1`,
         [renovacion.id_prestamo]
       )
 
-      // El préstamo original pasa a pendiente_devolucion con nueva fecha tope
+      // Encontrar el préstamo activo anterior (original o renovación previa)
+      // y pasarlo a pendiente_devolucion
       await client.query(
         `UPDATE prestamos
          SET estado_prestamo = 'pendiente_devolucion',
              fecha_tope_devolucion = $1
-         WHERE id_prestamo = $2`,
-        [fechaLimiteDev, renovacion.id_prestamo_original]
+         WHERE estado_prestamo = 'activo'
+           AND (id_prestamo = $2 OR id_prestamo_original = $2)
+           AND id_prestamo != $3`,
+        [fechaLimiteDev, renovacion.id_prestamo_original, renovacion.id_prestamo]
       )
 
       await crearNotificacion({
