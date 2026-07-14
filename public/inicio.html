@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        #opciones{
+            width: 400px;
+            background-color: bisque;
+            display: flex;
+            flex-direction: column;
+        }
+        #opciones input[type='checkbox']{
+            opacity: 0;
+        }
+        #opciones label:hover{
+            background-color: burlywood;
+        }
+    </style>
+</head>
+<body>
+    <button>
+        <a href="/insert/libro">insertar libro</a>
+    </button>
+    <button>
+        <a href="/api/librosjson">libros.json</a>
+    </button>
+    <br></br>
+    <div id="opciones">
+        <label >
+            <input type="checkbox" name="general" id="general"> General
+        </label>
+        <label>
+            <input type="checkbox" name="general" id="informatica"> Informática
+        </label>
+    </div>
+</body>
+</html>

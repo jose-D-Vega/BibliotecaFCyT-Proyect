@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catálogo de Libros</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+    <header class="navbar">
+        <div class="top-bar">Catálogo de Libros</div>
+        <nav class="tabs">
+            <div class="tab active">Registrar nuevo libro</div>
+            <div class="tab">Libros registrados</div>
+            <div class="tab">Informes</div>
+        </nav>
+    </header>
+
+    <main class="container">
+        <div class="form-card">
+            <h2>Registrar Nuevo Libro o Trabajo de Grado</h2>
+            
+            <form id="libroForm">
+                <div class="form-group">
+                    <label>Tipo de material</label>
+                    <select id="tipoMaterial">
+                        <option value="Libro">Libro</option>
+                        <option value="TFG">Trabajo Final de Grado (TFG)</option>
+                    </select>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label>Título</label>
+                        <input id="titulo" type="text" placeholder="Ingrese título">
+                    </div>
+                    <div class="form-group">
+                        <label>Autor(es)</label>
+                        <input id="autor" type="text" placeholder="Ingrese autor(es)">
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label id="labelDinamico">Editorial</label>
+                        <input type="text" id="inputDinamico" placeholder="Ingrese editorial">
+                    </div>
+                    <div class="form-group">
+                        <label>Año de publicación</label>
+                        <input id="anio_publicacion" type="text" placeholder="Ingrese año de publicación" min="1900">
+                    </div>
+                    <div class="form-group">
+                        <label>Cantidad de ejemplares</label>
+                        <input id="cantidad_ejemplar" type="text" placeholder="Ej: 3">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Carreras relacionadas (Puedes elegir varias)</label>
+                    <div class="custom-multiselect">
+                        <div class="select-header" onclick="toggleDropdown()">
+                            <span id="selected-text">Seleccionar carreras...</span>
+                            <span class="arrow">▼</span>
+                        </div>
+                        <div id="dropdown-options" class="options-list">
+                            <div class="option" onclick="selectOption(this)" data-value="general">General <span class="check-mark">✓</span></div>
+                            <div class="option" onclick="selectOption(this)" data-value="civil">Civil <span class="check-mark">✓</span></div>
+                            <div class="option" onclick="selectOption(this)" data-value="electricidad">Electricidad <span class="check-mark">✓</span></div>
+                            <div class="option" onclick="selectOption(this)" data-value="electronica">Electrónica <span class="check-mark">✓</span></div>
+                            <div class="option" onclick="selectOption(this)" data-value="electronica">Informática <span class="check-mark">✓</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group">
+                        <label>Ciudad</label>
+                        <input id="ciudad" type="text" placeholder="Ingrese ciudad">
+                    </div>
+                    <div class="form-group">
+                        <label>Facultad</label>
+                        <input id="facultad" type="text" placeholder="Ingrese facultad">
+                    </div>
+                </div>
+
+                <button id="btnGuardar" type="submit" class="btn-submit">Confirmar registro</button>
+                <button onclick="limpiarFormulario()" type="reset" class="btn-submit">Limpiar</button>
+            </form>
+
+            <div class="accordion-container">
+                <div class="accordion-item">
+                    <button class="accordion-header" onclick="toggleAccordion(this)">
+                        Instrucciones de llenado <span class="acc-icon">+</span>
+                    </button>
+                    <div class="accordion-content">
+                        <p>Verifique los datos antes de confirmar. Los campos marcados en rojo son obligatorios.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="customAlert" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-icon">⚠️</span>
+                <h3 id="modalTitle">Atención</h3>
+            </div>
+            <p id="modalMessage">Mensaje de error aquí.</p>
+            <button onclick="closeAlert()" class="btn-modal">Entendido</button>
+        </div>
+    </div>
+    <script src="/libro.js"></script>
+</body>
+</html>
