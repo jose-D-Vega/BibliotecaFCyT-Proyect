@@ -550,7 +550,7 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
 
   // Excluir préstamos en estado 'renovado' — son reemplazados visualmente
   // por el registro de la renovación que los sucedió
-  whereClause += ` AND p.estado_prestamo != 'renovado'`
+  whereClause += ` AND p.estado_prestamo NOT IN ('renovado', 'renovacion_finalizada')`
 
   if (id_usuario) {
     whereClause += ` AND p.id_usuario = $${paramIndex}`
@@ -660,7 +660,7 @@ const getLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_has
 const countLoans = async ({ id_usuario, estado, es_reserva, fecha_desde, fecha_hasta }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = `WHERE estado_prestamo != 'renovado'`
+  let whereClause = `WHERE estado_prestamo NOT IN ('renovado', 'renovacion_finalizada')`
 
   if (id_usuario) {
     whereClause += ` AND id_usuario = $${paramIndex}`
@@ -874,7 +874,6 @@ const approveRenewal = async (id_renovacion, id_bibliotecario) => {
   try {
     await client.query('BEGIN')
 
-    // Verificar que el registro es una renovación en estado correcto
     const { rows: renovacion } = await client.query(
       `SELECT * FROM prestamos
        WHERE id_prestamo = $1
@@ -891,27 +890,33 @@ const approveRenewal = async (id_renovacion, id_bibliotecario) => {
     const id_original = renovacion[0].id_prestamo_original
     const id_usuario = renovacion[0].id_usuario
 
-    // Verificar que el usuario no esté sancionado
     const { rows: usuarioData } = await client.query(
       `SELECT sancionado FROM usuarios WHERE id_usuario = $1`,
       [id_usuario]
     )
     if (usuarioData[0]?.sancionado) {
       await client.query('ROLLBACK')
-      return { error: 'El usuario tiene sanciones activas. No se puede aprobar la renovación hasta que regularice su situación.' }
+      return { error: 'El usuario tiene sanciones activas. No se puede aprobar la renovación.' }
     }
 
-    // El préstamo original pasa a 'renovado' — ya no es el registro activo
+    // Encontrar el préstamo activo anterior en esta cadena
+    // (puede ser el original mismo si es la 1ra renovación, o una renovación previa si es la 2da+)
+    // y marcarlo según corresponda:
+    // - el original pasa a 'renovado'
+    // - una renovación previa pasa a 'renovacion_finalizada'
     await client.query(
       `UPDATE prestamos
-       SET estado_prestamo = 'renovado',
-           fecha_respuesta = NOW(),
-           id_bibliotecario = $1
-       WHERE id_prestamo = $2`,
-      [id_bibliotecario, id_original] // ################## Aquí solo debería actualizarce estado_prestamo
+       SET estado_prestamo = CASE
+         WHEN id_prestamo = $1 THEN 'renovado'
+         ELSE 'renovacion_finalizada'
+       END,
+       id_bibliotecario = $2
+       WHERE estado_prestamo = 'activo'
+         AND (id_prestamo = $1 OR id_prestamo_original = $1)
+         AND id_prestamo != $3`,
+      [id_original, id_bibliotecario, id_renovacion]
     )
 
-    // La renovación pasa a 'activo' con todos los datos de activación
     const nuevaFechaTope = new Date()
     nuevaFechaTope.setDate(nuevaFechaTope.getDate() + 5)
 
@@ -952,7 +957,6 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
   try {
     await client.query('BEGIN')
 
-    // Verificar que el registro es una renovación en estado correcto
     const { rows: renovacion } = await client.query(
       `SELECT * FROM prestamos
        WHERE id_prestamo = $1
@@ -969,7 +973,6 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
     const id_original = renovacion[0].id_prestamo_original
     const id_usuario = renovacion[0].id_usuario
 
-    // La renovación queda como rechazada
     await client.query(
       `UPDATE prestamos
        SET estado_prestamo = 'rechazado',
@@ -979,19 +982,21 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
       [id_bibliotecario, id_renovacion]
     )
 
-    // El original pasa a pendiente_devolucion con 2 días de gracia
     const fechaLimiteDev = new Date()
     fechaLimiteDev.setDate(fechaLimiteDev.getDate() + 2)
 
-    const { rows: originalActualizado } = await client.query(
+    // Encontrar el préstamo activo anterior y ponerlo en pendiente_devolucion
+    // (puede ser el original o una renovación previa)
+    const { rows: activoActualizado } = await client.query(
       `UPDATE prestamos
        SET estado_prestamo = 'pendiente_devolucion',
            fecha_tope_devolucion = $1,
-           fecha_respuesta = NOW(),
            id_bibliotecario = $2
-       WHERE id_prestamo = $3
+       WHERE estado_prestamo = 'activo'
+         AND (id_prestamo = $3 OR id_prestamo_original = $3)
+         AND id_prestamo != $4
        RETURNING *`,
-      [fechaLimiteDev, id_bibliotecario, id_original]
+      [fechaLimiteDev, id_bibliotecario, id_original, id_renovacion]
     )
 
     await client.query('COMMIT')
@@ -1000,11 +1005,11 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
       id_usuario,
       tipo: 'renovacion_rechazada',
       titulo: 'Renovación rechazada',
-      mensaje: `Tu solicitud de renovación fue rechazada. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros antes de recibir una sanción.`,
-      id_prestamo: id_original
+      mensaje: `Tu solicitud de renovación fue rechazada. Tenés hasta el ${fechaLimiteDev.toLocaleDateString('es-PY')} para devolver los libros.`,
+      id_prestamo: activoActualizado[0]?.id_prestamo || id_original
     })
 
-    return originalActualizado[0]
+    return activoActualizado[0]
   } catch (error) {
     await client.query('ROLLBACK')
     throw error

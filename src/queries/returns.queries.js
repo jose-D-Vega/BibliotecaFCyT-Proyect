@@ -2,17 +2,24 @@ const pool = require('../config/db')
 const { autoResolveFaltaEntrega } = require('./sanctions.queries')
 const { crearNotificacion } = require('./notifications.queries')
 
-// Buscar préstamos activos por datos del usuario
-const searchActiveLoans = async (search) => {
+// Obtener todos los préstamos activos sin filtro de búsqueda
+const getAllActiveLoans = async () => {
   const { rows } = await pool.query(
     `SELECT
        p.id_prestamo,
-       p.fecha_solicitud,
-       p.fecha_tope_devolucion,
+       p.id_prestamo_original,
+       p.numero_renovacion,
        p.estado_prestamo,
        p.es_reserva,
-       p.numero_renovacion,
-       p.id_prestamo_original,
+       p.fecha_tope_devolucion,
+       p.fecha_limite_respuesta_renovacion,
+       -- Fechas del préstamo raíz para renovaciones
+       COALESCE(orig.fecha_solicitud, p.fecha_solicitud)   AS fecha_solicitud,
+       COALESCE(orig.fecha_respuesta, p.fecha_respuesta)   AS fecha_respuesta,
+       COALESCE(orig.fecha_activacion, p.fecha_activacion) AS fecha_activacion,
+       CASE WHEN p.id_prestamo_original IS NOT NULL
+         THEN p.fecha_activacion ELSE NULL
+       END AS fecha_renovacion,
        u.id_usuario,
        u.nombre_apellido,
        u.correo,
@@ -22,7 +29,47 @@ const searchActiveLoans = async (search) => {
        ) AS ejemplares_pendientes
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
-     -- Para renovaciones los detalles están bajo id_prestamo_original
+     LEFT JOIN prestamos orig ON p.id_prestamo_original = orig.id_prestamo
+     JOIN detalles_prestamos dp
+       ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
+     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido')
+     GROUP BY p.id_prestamo, u.id_usuario,
+       orig.fecha_solicitud, orig.fecha_respuesta, orig.fecha_activacion
+     HAVING COUNT(dp.id_ejemplar) FILTER (
+       WHERE dp.estado_prestamo_ejemplar = 'activo'
+     ) > 0
+     ORDER BY p.fecha_tope_devolucion ASC`
+  )
+  return rows
+}
+
+// Buscar préstamos activos por datos del usuario
+const searchActiveLoans = async (search) => {
+  const { rows } = await pool.query(
+    `SELECT
+       p.id_prestamo,
+       p.id_prestamo_original,
+       p.numero_renovacion,
+       p.estado_prestamo,
+       p.es_reserva,
+       p.fecha_tope_devolucion,
+       p.fecha_limite_respuesta_renovacion,
+       COALESCE(orig.fecha_solicitud, p.fecha_solicitud)   AS fecha_solicitud,
+       COALESCE(orig.fecha_respuesta, p.fecha_respuesta)   AS fecha_respuesta,
+       COALESCE(orig.fecha_activacion, p.fecha_activacion) AS fecha_activacion,
+       CASE WHEN p.id_prestamo_original IS NOT NULL
+         THEN p.fecha_activacion ELSE NULL
+       END AS fecha_renovacion,
+       u.id_usuario,
+       u.nombre_apellido,
+       u.correo,
+       u.ci,
+       COUNT(dp.id_ejemplar) FILTER (
+         WHERE dp.estado_prestamo_ejemplar = 'activo'
+       ) AS ejemplares_pendientes
+     FROM prestamos p
+     JOIN usuarios u ON p.id_usuario = u.id_usuario
+     LEFT JOIN prestamos orig ON p.id_prestamo_original = orig.id_prestamo
      JOIN detalles_prestamos dp
        ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
      WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion')
@@ -31,7 +78,8 @@ const searchActiveLoans = async (search) => {
          u.correo ILIKE $1 OR
          u.ci ILIKE $1
        )
-     GROUP BY p.id_prestamo, u.id_usuario
+     GROUP BY p.id_prestamo, u.id_usuario,
+       orig.fecha_solicitud, orig.fecha_respuesta, orig.fecha_activacion
      HAVING COUNT(dp.id_ejemplar) FILTER (
        WHERE dp.estado_prestamo_ejemplar = 'activo'
      ) > 0
@@ -41,48 +89,29 @@ const searchActiveLoans = async (search) => {
   return rows
 }
 
-// Obtener todos los préstamos activos sin filtro de búsqueda
-const getAllActiveLoans = async () => {
-  const { rows } = await pool.query(
-    `SELECT
-       p.id_prestamo,
-       p.fecha_solicitud,
-       p.fecha_tope_devolucion,
-       p.estado_prestamo,
-       p.es_reserva,
-       p.numero_renovacion,
-       p.id_prestamo_original,
-       u.id_usuario,
-       u.nombre_apellido,
-       u.correo,
-       u.ci,
-       COUNT(dp.id_ejemplar) FILTER (
-         WHERE dp.estado_prestamo_ejemplar = 'activo'
-       ) AS ejemplares_pendientes
-     FROM prestamos p
-     JOIN usuarios u ON p.id_usuario = u.id_usuario
-     JOIN detalles_prestamos dp
-       ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
-     WHERE p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido')
-     GROUP BY p.id_prestamo, u.id_usuario
-     HAVING COUNT(dp.id_ejemplar) FILTER (
-       WHERE dp.estado_prestamo_ejemplar = 'activo'
-     ) > 0
-     ORDER BY p.fecha_tope_devolucion ASC`
-  )
-  return rows
-}
-
 // Obtener detalle de un préstamo con ejemplares pendientes de devolver
 const getLoanForReturn = async (id_prestamo) => {
   const { rows: prestamo } = await pool.query(
     `SELECT
-       p.*,
+       p.id_prestamo,
+       p.id_prestamo_original,
+       p.numero_renovacion,
+       p.estado_prestamo,
+       p.es_reserva,
+       p.fecha_tope_devolucion,
+       p.id_usuario,
        u.nombre_apellido,
        u.correo,
-       u.ci
+       u.ci,
+       COALESCE(orig.fecha_solicitud, p.fecha_solicitud)   AS fecha_solicitud,
+       COALESCE(orig.fecha_respuesta, p.fecha_respuesta)   AS fecha_respuesta,
+       COALESCE(orig.fecha_activacion, p.fecha_activacion) AS fecha_activacion,
+       CASE WHEN p.id_prestamo_original IS NOT NULL
+         THEN p.fecha_activacion ELSE NULL
+       END AS fecha_renovacion
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
+     LEFT JOIN prestamos orig ON p.id_prestamo_original = orig.id_prestamo
      WHERE p.id_prestamo = $1
        AND p.estado_prestamo IN ('activo', 'pendiente_devolucion', 'vencido')`,
     [id_prestamo]
@@ -90,7 +119,6 @@ const getLoanForReturn = async (id_prestamo) => {
 
   if (prestamo.length === 0) return null
 
-  // Para renovaciones, los detalles están bajo el id_prestamo_original
   const id_detalles = prestamo[0].id_prestamo_original || id_prestamo
 
   const { rows: ejemplares } = await pool.query(
@@ -259,27 +287,42 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
       `SELECT COUNT(*) FROM detalles_prestamos
        WHERE id_prestamo = $1
          AND estado_prestamo_ejemplar IN ('activo', 'perdido')`,
-      [id_detalles]
+      [id_detalles] 
     )
 
     const quedanPendientes = parseInt(pendientes[0].count) > 0
 
     if (!quedanPendientes) {
-      // Verificar si quedaron ejemplares perdidos sin resolver
       const { rows: perdidos } = await client.query(
         `SELECT COUNT(*) FROM detalles_prestamos
-        WHERE id_prestamo = $1
-          AND estado_prestamo_ejemplar = 'perdido'`,
-        [id_prestamo]
+         WHERE id_prestamo = $1
+           AND estado_prestamo_ejemplar = 'perdido'`,
+        [id_detalles] 
       )
 
       const hayPerdidos = parseInt(perdidos[0].count) > 0
-      const nuevoEstadoPrestamo = hayPerdidos ? 'cerrado_con_perdida' : 'devuelto'
+      const esRenovacion = prestamoInfo[0].id_prestamo_original !== null
 
-      await client.query(
-        `UPDATE prestamos SET estado_prestamo = $1 WHERE id_prestamo = $2`,
-        [nuevoEstadoPrestamo, id_prestamo]
-      )
+      if (esRenovacion) {
+        // La renovación activa cierra como 'renovacion_finalizada'
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = 'renovacion_finalizada'
+           WHERE id_prestamo = $1`,
+          [id_prestamo]
+        )
+        // El original pasa a 'devuelto' (o 'cerrado_con_perdida' si quedan perdidos sin resolver)
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = $1
+           WHERE id_prestamo = $2`,
+          [hayPerdidos ? 'cerrado_con_perdida' : 'devuelto', prestamoInfo[0].id_prestamo_original]
+        )
+      } else {
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = $1
+           WHERE id_prestamo = $2`,
+          [hayPerdidos ? 'cerrado_con_perdida' : 'devuelto', id_prestamo]
+        )
+      }
 
       await autoResolveFaltaEntrega(id_prestamo, client)
 
@@ -377,7 +420,7 @@ const reassignReservation = async (id_prestamo, id_ejemplar_anterior, id_ejempla
 const getHistorial = async ({ search, fecha_desde, fecha_hasta, limit, offset }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = `WHERE p.estado_prestamo IN ('devuelto', 'vencido')`
+  let whereClause = `WHERE p.estado_prestamo IN ('devuelto', 'vencido', 'renovacion_finalizada', 'cerrado_con_perdida')`
 
   if (search) {
     whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
@@ -563,6 +606,14 @@ const countPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta,
 }
 
 const getDetalleDevoluciones = async (id_prestamo) => {
+  // Resolver el id correcto para detalles_prestamos (para renovaciones)
+  const { rows: prestamoInfo } = await pool.query(
+    `SELECT COALESCE(id_prestamo_original, id_prestamo) AS id_detalles
+     FROM prestamos WHERE id_prestamo = $1`,
+    [id_prestamo]
+  )
+  const id_detalles = prestamoInfo[0]?.id_detalles || id_prestamo
+
   const { rows: detalles } = await pool.query(
     `SELECT
        d.id_devolucion,
@@ -582,7 +633,6 @@ const getDetalleDevoluciones = async (id_prestamo) => {
     [id_prestamo]
   )
 
-  // Ejemplares activos aún pendientes
   const { rows: pendientes } = await pool.query(
     `SELECT dp.id_ejemplar, dp.estado_prestamo_ejemplar, l.titulo, l.autor
      FROM detalles_prestamos dp
@@ -590,10 +640,9 @@ const getDetalleDevoluciones = async (id_prestamo) => {
      JOIN libros l ON e.id_libro = l.id_libro
      WHERE dp.id_prestamo = $1
        AND dp.estado_prestamo_ejemplar = 'activo'`,
-    [id_prestamo]
+    [id_detalles]
   )
 
-  // Ejemplares perdidos pendientes de recuperación o reemplazo
   const { rows: perdidos } = await pool.query(
     `SELECT
        dp.id_ejemplar,
@@ -610,7 +659,7 @@ const getDetalleDevoluciones = async (id_prestamo) => {
        AND s.tipo_infraccion = 'perdida'
      WHERE dp.id_prestamo = $1
        AND dp.estado_prestamo_ejemplar = 'perdido'`,
-    [id_prestamo]
+    [id_detalles]
   )
 
   return { devueltos: detalles, pendientes, perdidos }
@@ -713,6 +762,14 @@ const recuperarEjemplarPerdido = async (id_prestamo, id_ejemplar, id_bibliotecar
   try {
     await client.query('BEGIN')
 
+    // Resolver id_detalles para renovaciones
+    const { rows: prestamoMeta } = await client.query(
+      `SELECT id_usuario, id_prestamo_original FROM prestamos WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+    const id_detalles = prestamoMeta[0]?.id_prestamo_original || id_prestamo
+    const esRenovacion = prestamoMeta[0]?.id_prestamo_original !== null
+
     // Verificar que el ejemplar realmente está perdido en este préstamo
     const { rows: detalle } = await client.query(
       `SELECT dp.*, e.id_libro FROM detalles_prestamos dp
@@ -720,7 +777,7 @@ const recuperarEjemplarPerdido = async (id_prestamo, id_ejemplar, id_bibliotecar
        WHERE dp.id_prestamo = $1
          AND dp.id_ejemplar = $2
          AND dp.estado_prestamo_ejemplar = 'perdido'`,
-      [id_prestamo, id_ejemplar]
+      [id_detalles, id_ejemplar]
     )
     if (detalle.length === 0) {
       throw Object.assign(new Error('El ejemplar no está en estado perdido para este préstamo'), { code: 'EJEMPLAR_NO_PERDIDO' })
@@ -740,7 +797,7 @@ const recuperarEjemplarPerdido = async (id_prestamo, id_ejemplar, id_bibliotecar
       `UPDATE detalles_prestamos
        SET estado_prestamo_ejemplar = 'devuelto'
        WHERE id_prestamo = $1 AND id_ejemplar = $2`,
-      [id_prestamo, id_ejemplar]
+      [id_detalles, id_ejemplar]
     )
 
     // Actualizar estado del ejemplar según cómo fue devuelto
@@ -799,17 +856,27 @@ const recuperarEjemplarPerdido = async (id_prestamo, id_ejemplar, id_bibliotecar
       `SELECT COUNT(*) FROM detalles_prestamos
        WHERE id_prestamo = $1
          AND estado_prestamo_ejemplar IN ('activo', 'perdido')`,
-      [id_prestamo]
+      [id_detalles]
     )
     const quedanPendientes = parseInt(pendientes[0].count) > 0
-
     let prestamoCerrado = false
+
     if (!quedanPendientes) {
-      await client.query(
-        `UPDATE prestamos SET estado_prestamo = 'devuelto'
-         WHERE id_prestamo = $1`,
-        [id_prestamo]
-      )
+      if (esRenovacion) {
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = 'renovacion_finalizada' WHERE id_prestamo = $1`,
+          [id_prestamo]
+        )
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = 'devuelto' WHERE id_prestamo = $1`,
+          [prestamoMeta[0].id_prestamo_original]
+        )
+      } else {
+        await client.query(
+          `UPDATE prestamos SET estado_prestamo = 'devuelto' WHERE id_prestamo = $1`,
+          [id_prestamo]
+        )
+      }
       prestamoCerrado = true
     }
 
