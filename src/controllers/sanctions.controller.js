@@ -1,5 +1,5 @@
 const { crearNotificacion } = require('../queries/notifications.queries')
-
+const { registrarActividad } = require('../queries/activity.queries')
 const {
   createSanction, confirmSanction, rejectSanction,
   getSanctions, countSanctions, getSanctionById,
@@ -25,6 +25,14 @@ const confirmSanctionHandler = async (req, res) => {
       id_prestamo: sancion.id_prestamo,
       id_sancion: sancion.id_sancion
     })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'sancionar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Confirmó la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Sanción confirmada', data: sancion })
   } catch (error) {
@@ -58,6 +66,14 @@ const rejectSanctionHandler = async (req, res) => {
         id_sancion: sancion.id_sancion
       })
     }
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'rechazar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Rechazó la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Sanción rechazada', data: sancion })
   } catch (error) {
@@ -150,6 +166,14 @@ const createSanctionHandler = async (req, res) => {
       id_sancion: sancion.id_sancion
     })
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'sancionar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Registró una sanción de tipo "${tipo_infraccion}" al usuario #${id_usuario}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.status(201).json({ message: 'Sanción registrada exitosamente', data: sancion })
   } catch (error) {
     if (error.code === 'SANCION_DUPLICADA') {
@@ -230,6 +254,14 @@ const resolveSanctionHandler = async (req, res) => {
       })
     }
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Resolvió la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Sanción resuelta exitosamente', data: sancion })
   } catch (error) {
     if (error.code === 'EJEMPLAR_AUN_PERDIDO') {
@@ -245,6 +277,15 @@ const escalateSanctionHandler = async (req, res) => {
     const { id } = req.params
     const sancion = await escalateSanction(id)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o no está activa' })
+    
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Escaló la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Sanción escalada a entidades superiores', data: sancion })
   } catch (error) {
     console.error('Error al escalar sanción:', error)
@@ -266,6 +307,15 @@ const desescalateSanctionHandler = async (req, res) => {
 
     const sancion = await desescalateSanction(id)
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada o no está escalada' })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Revirtió el escalamiento de la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Sanción revertida a estado activa', data: sancion })
   } catch (error) {
     console.error('Error al des-escalar sanción:', error)
@@ -415,6 +465,14 @@ const editSanctionHandler = async (req, res) => {
 
     const sancion = await editSanction(id, { descripcion_sancion, dias_suspension })
     if (!sancion) return res.status(404).json({ error: 'Sanción no encontrada' })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'sanciones',
+      id_entidad: sancion.id_sancion,
+      descripcion: `Editó la sanción #${sancion.id_sancion}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Sanción actualizada', data: sancion })
   } catch (error) {

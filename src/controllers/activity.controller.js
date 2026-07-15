@@ -2,11 +2,15 @@ const { getActividades, countActividades } = require('../queries/activity.querie
 
 const getActividadesHandler = async (req, res) => {
   try {
-    const { id_usuario, tipo_accion, entidad, page = 1, limit = 50 } = req.query
-    const parsedLimit = parseInt(limit)
-    const parsedPage = parseInt(page)
-    const offset = (parsedPage - 1) * parsedLimit
-    const filters = { id_usuario, tipo_accion, entidad, limit: parsedLimit, offset }
+    const { id_usuario, tipo_accion, entidad, fecha_desde, fecha_hasta } = req.query
+
+    const parsedLimit = parseInt(req.query.limit)
+    const parsedPage = parseInt(req.query.page)
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50
+    const page = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1
+    const offset = (page - 1) * limit
+
+    const filters = { id_usuario, tipo_accion, entidad, fecha_desde, fecha_hasta, limit, offset }
 
     const [actividades, total] = await Promise.all([
       getActividades(filters),
@@ -17,9 +21,9 @@ const getActividadesHandler = async (req, res) => {
       data: actividades,
       pagination: {
         total,
-        page: parsedPage,
-        limit: parsedLimit,
-        totalPages: Math.ceil(total / parsedLimit)
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
       }
     })
   } catch (error) {

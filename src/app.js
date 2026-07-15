@@ -14,6 +14,7 @@ const sessionRoutes = require('./routes/session.routes')
 const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
 const sanctionsRoutes = require('./routes/sanctions.routes')
+const reportsRoutes = require('./routes/reports.routes')
 
 const errorHandler = require('./middlewares/error.middleware')
 
@@ -40,6 +41,7 @@ app.use('/api/sessions', sessionRoutes)
 app.use('/api/notifications', notificationsRoutes)
 app.use('/api/returns', returnsRoutes)
 app.use('/api/sanctions', sanctionsRoutes)
+app.use('/api/reports', reportsRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {

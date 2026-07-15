@@ -3,8 +3,8 @@ const pool = require('../config/db')
 const isAdmin = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' })
   const userRol = req.user.rol ? req.user.rol.toLowerCase() : ''
-  if (userRol === 'admin' || userRol === 'bibliotecario') return next()
-  return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de admin o bibliotecario' })
+  if (userRol === 'admin') return next()
+  return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de admin' })
 }
 
 const isBibliotecario = (req, res, next) => {

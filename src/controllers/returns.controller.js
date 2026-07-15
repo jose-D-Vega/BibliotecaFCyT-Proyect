@@ -2,6 +2,7 @@ const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, 
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
    getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario,
   reassignReservation, recuperarEjemplarPerdido, reemplazarEjemplarPerdido, } = require('../queries/returns.queries')
+const { registrarActividad } = require('../queries/activity.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
   try {
@@ -68,6 +69,13 @@ const registerReturnHandler = async (req, res) => {
       mensaje += '. Hay reservas afectadas por ejemplares dañados/perdidos que requieren tu confirmación.'
     }
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'devolver',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Registró la devolución de ${devoluciones.length} ejemplar(es) del préstamo #${id}${resultado.prestamo_cerrado ? ' (préstamo cerrado)' : ' (quedan ejemplares pendientes)'}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: mensaje, data: resultado })
   } catch (error) {
@@ -98,6 +106,14 @@ const resolveReservaAfectadaHandler = async (req, res) => {
 
     const resultado = await reassignReservation(id_prestamo, id_ejemplar_anterior, id_ejemplar_nuevo)
     if (resultado.error) return res.status(409).json({ error: resultado.error })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id_prestamo),
+      descripcion: `Reasignó la reserva del préstamo #${id_prestamo} al ejemplar #${id_ejemplar_nuevo}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Reserva reasignada al ejemplar sustituto', data: resultado })
   } catch (error) {
@@ -201,6 +217,15 @@ const recuperarEjemplarPerdidoHandler = async (req, res) => {
       id_prestamo, id_ejemplar, id_bibliotecario,
       { estado_devuelto, observaciones }
     )
+
+    registrarActividad({
+      id_usuario: id_bibliotecario,
+      tipo_accion: 'devolver',
+      entidad: 'ejemplares',
+      id_entidad: parseInt(id_ejemplar),
+      descripcion: `Registró la recuperación del ejemplar #${id_ejemplar} (préstamo #${id_prestamo}) como ${estado_devuelto}${resultado.prestamo_cerrado ? ' (préstamo cerrado)' : ''}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Ejemplar recuperado registrado', data: resultado })
   } catch (error) {
     if (error.code === 'EJEMPLAR_NO_PERDIDO') {
@@ -217,6 +242,15 @@ const reemplazarEjemplarPerdidoHandler = async (req, res) => {
     const id_bibliotecario = req.user.id_usuario
 
     const resultado = await reemplazarEjemplarPerdido(id_prestamo, id_ejemplar, id_bibliotecario)
+
+    registrarActividad({
+      id_usuario: id_bibliotecario,
+      tipo_accion: 'editar',
+      entidad: 'ejemplares',
+      id_entidad: parseInt(id_ejemplar),
+      descripcion: `Registró el reemplazo del ejemplar perdido #${id_ejemplar} (préstamo #${id_prestamo})${resultado.prestamo_cerrado ? ' (préstamo cerrado)' : ''}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Reemplazo registrado', data: resultado })
   } catch (error) {
     if (error.code === 'EJEMPLAR_NO_PERDIDO') {
