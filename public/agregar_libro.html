@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agregar Libro — BibliotecaFCyT</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #181c27;
+      --border: #2a2f3f;
+      --accent: #c9a84c;
+      --accent-dim: rgba(201,168,76,0.12);
+      --text: #e8e4d9;
+      --muted: #7a7f94;
+      --success: #4caf80;
+      --error: #e05c5c;
+      --radius: 10px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 300;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 48px 16px;
+    }
+
+    /* Grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 680px;
+      position: relative;
+      z-index: 1;
+      animation: fadeUp 0.6s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Header */
+    .header {
+      margin-bottom: 40px;
+    }
+
+    .header .label {
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+
+    .header h1 {
+      font-family: 'Playfair Display', serif;
+      font-size: 2.4rem;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--text);
+    }
+
+    .header p {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    /* Divider accent */
+    .divider {
+      width: 48px;
+      height: 2px;
+      background: var(--accent);
+      margin: 20px 0 32px;
+    }
+
+    /* Form card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px;
+    }
+
+    .section-title {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .grid.full { grid-template-columns: 1fr; }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .field.span2 { grid-column: span 2; }
+
+    label {
+      font-size: 0.78rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    label .req {
+      color: var(--accent);
+      margin-left: 3px;
+    }
+
+    input, select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.93rem;
+      padding: 11px 14px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      outline: none;
+      width: 100%;
+    }
+
+    select option { background: var(--surface); }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    input::placeholder { color: var(--muted); opacity: 0.6; }
+
+    /* Separator between sections */
+    .sep {
+      margin: 28px 0 24px;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Submit */
+    .actions {
+      margin-top: 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    button[type="submit"] {
+      background: var(--accent);
+      color: #0f1117;
+      border: none;
+      border-radius: 7px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      padding: 13px 32px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+
+    button[type="submit"]:hover { opacity: 0.88; transform: translateY(-1px); }
+    button[type="submit"]:active { transform: translateY(0); }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--muted);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      padding: 13px 24px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    button.secondary:hover { border-color: var(--muted); color: var(--text); }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      padding: 14px 22px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.3s, transform 0.3s;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    #toast.show { opacity: 1; transform: translateY(0); }
+    #toast.success { background: var(--success); color: #fff; }
+    #toast.error   { background: var(--error);   color: #fff; }
+
+    @media (max-width: 540px) {
+      .grid { grid-template-columns: 1fr; }
+      .field.span2 { grid-column: span 1; }
+      .card { padding: 24px 20px; }
+      .header h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <div class="label">BibliotecaFCyT</div>
+    <h1>Registrar nuevo libro</h1>
+    <p>Completá los campos para agregar un libro al catálogo.</p>
+  </div>
+  <div class="divider"></div>
+
+  <div class="card">
+
+    <!-- Datos principales -->
+    <div class="section-title">Datos principales</div>
+    <div class="grid">
+
+      <div class="field span2">
+        <label>Título <span class="req">*</span></label>
+        <input type="text" id="titulo" placeholder="Ej: Introducción a los Algoritmos" />
+      </div>
+
+      <div class="field">
+        <label>Autor <span class="req">*</span></label>
+        <input type="text" id="autor" placeholder="Ej: Thomas H. Cormen" />
+      </div>
+
+      <div class="field">
+        <label>Año de publicación <span class="req">*</span></label>
+        <input type="number" id="anio_publicacion" placeholder="Ej: 2009" min="1000" max="2099" />
+      </div>
+
+      <div class="field">
+        <label>Editorial</label>
+        <input type="text" id="editorial" placeholder="Ej: MIT Press" />
+      </div>
+
+      <div class="field">
+        <label>Ciudad de origen</label>
+        <input type="text" id="ciudad" placeholder="Ej: Asunción" />
+      </div>
+
+    </div>
+
+    <hr class="sep" />
+
+    <!-- Clasificación -->
+    <div class="section-title">Clasificación</div>
+    <div class="grid">
+
+      <div class="field">
+        <label>Carrera</label>
+        <select id="carrera">
+          <option value="">— Sin asignar —</option>
+          <option value="Informática">Informática</option>
+          <option value="Electrónica">Electrónica</option>
+          <option value="Civil">Civil</option>
+          <option value="General">General</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Cantidad de ejemplares <span class="req">*</span></label>
+        <input type="number" id="cantidad_ejemplar" placeholder="Ej: 3" min="1" />
+      </div>
+
+    </div>
+
+  </div>
+
+  <div class="actions">
+    <button type="submit" id="btnGuardar" onclick="guardarLibro()">Guardar libro</button>
+    <button class="secondary" onclick="limpiarFormulario()">Limpiar</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="guardar_libro.js"></script>
+
+<script>
+  const API_URL = 'http://localhost:3210';
+
+  async function guardarLibro() {
+    const btn = document.getElementById('btnGuardar');
+
+    const campos = {
+        titulo:           document.getElementById('titulo').value.trim(),
+        autor:            document.getElementById('autor').value.trim(),
+        anio_publicacion: document.getElementById('anio_publicacion').value,
+        cantidad_ejemplar:document.getElementById('cantidad_ejemplar').value,
+        editorial:        document.getElementById('inputDinamico').value.trim() || null,
+        ciudad:           document.getElementById('ciudad').value.trim() || null,
+        carrera:          document.getElementById('selected-text').textContent || null,
+        facultad:         document.getElementById('facultad').value || null,
+        tipo_material:    document.getElementById('tipoMaterial').value,
+    };
+
+    if (!campos.titulo || !campos.autor || !campos.anio_publicacion || !campos.cantidad_ejemplar) {
+        mostrarToast('Completá todos los campos obligatorios (*)', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Guardando…';
+
+    try {
+        const res = await fetch(`${API_URL}/libros`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(campos),
+        });
+
+        if (!res.ok) throw new Error('Error del servidor');
+
+        mostrarToast('Libro registrado correctamente', 'success');
+        limpiarFormulario();
+    } catch (err) {
+        mostrarToast('No se pudo guardar el libro. Verificá la conexión.', 'error');
+        console.error(err);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Confirmar registro';
+    }
+  }
+
+  function limpiarFormulario() {
+    ['titulo','autor','anio_publicacion','cantidad_ejemplar','editorial','ciudad'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('carrera').value = '';
+  }
+
+  function mostrarToast(msg, tipo) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `show ${tipo}`;
+    setTimeout(() => { t.className = ''; }, 3500);
+  }
+</script>
+</body>
+</html>

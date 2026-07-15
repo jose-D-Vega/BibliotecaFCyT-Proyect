@@ -468,11 +468,17 @@ const getMySanctions = async (id_usuario) => {
        s.*,
        l.titulo AS titulo_material,
        l.autor AS autor_material,
-       p.fecha_tope_devolucion
+       l.editorial AS editorial_material,
+       e.id_ejemplar,
+       e.estado_ejemplar,
+       p.fecha_tope_devolucion,
+       p.estado_prestamo,
+       a.nombre_apellido AS admin_nombre
      FROM sanciones s
      LEFT JOIN prestamos p ON s.id_prestamo = p.id_prestamo
      LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
+     LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
      WHERE s.id_usuario = $1
        AND s.estado_sancion != 'rechazada'
      ORDER BY s.fecha_sancion DESC`,
