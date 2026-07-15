@@ -1,1 +1,0 @@
-Este es un archivo para verificar que la carpeta models se suba al repositorio
