@@ -1,12 +1,42 @@
 const pool = require('../config/db')
 const { REPORT_ENTITIES } = require('../config/reports.config')
 
-const construirReporte = async ({ entidad, columnas, filtros }) => {
+// Búsqueda liviana de usuarios para los filtros de tipo "buscar usuario" del frontend.
+// Query propia (no reutiliza getAllUsers) porque acá también necesitamos buscar por CI,
+const buscarUsuariosParaFiltro = async (search) => {
+  if (!search || search.trim().length < 2) return []
+
+  const { rows } = await pool.query(
+    `SELECT id_usuario, nombre_apellido, correo, ci
+     FROM usuarios
+     WHERE nombre_apellido ILIKE $1 OR correo ILIKE $1 OR ci ILIKE $1
+     ORDER BY nombre_apellido ASC
+     LIMIT 10`,
+    [`%${search}%`]
+  )
+  return rows
+}
+
+const construirReporte = async ({ entidad, columnas, filtros, extensiones, orden_por, orden_dir }) => {
   const config = REPORT_ENTITIES[entidad]
   if (!config) throw new Error(`Entidad de reporte desconocida: ${entidad}`)
 
-  // Whitelist de columnas: si no se especifican, se devuelven todas las disponibles
-  const columnasValidas = Object.keys(config.columns)
+  // Extensiones válidas para esta entidad (whitelist): agregan joins + columnas + filtros extra
+  const extensionesValidas = (extensiones || []).filter(e => config.extensiones?.[e])
+
+  let joinsExtra = ''
+  let columnsDisponibles = { ...config.columns }
+  let filtersDisponibles = { ...config.filters }
+
+  for (const extKey of extensionesValidas) {
+    const ext = config.extensiones[extKey]
+    joinsExtra += ` ${ext.joinClause}`
+    columnsDisponibles = { ...columnsDisponibles, ...ext.columns }
+    filtersDisponibles = { ...filtersDisponibles, ...(ext.filters || {}) }
+  }
+
+  // Whitelist de columnas (incluyendo las de extensiones activas)
+  const columnasValidas = Object.keys(columnsDisponibles)
   const columnasSeleccionadas = (columnas && columnas.length > 0)
     ? columnas.filter(c => columnasValidas.includes(c))
     : columnasValidas
@@ -16,18 +46,18 @@ const construirReporte = async ({ entidad, columnas, filtros }) => {
   }
 
   const selectClause = columnasSeleccionadas
-    .map(c => `${config.columns[c].expr} AS ${c}`)
+    .map(c => `${columnsDisponibles[c].expr} AS ${c}`)
     .join(', ')
 
-  // WHERE dinámico, pero SOLO con filtros que existen en la config (whitelist real, no interpolación libre)
+  // WHERE dinámico, solo con filtros presentes en config o en extensiones activas
   const values = []
   const conditions = []
   let paramIndex = 1
 
   for (const [key, value] of Object.entries(filtros || {})) {
     if (value === undefined || value === null || value === '') continue
-    const filterConfig = config.filters[key]
-    if (!filterConfig) continue // filtro no reconocido para esta entidad: se ignora silenciosamente
+    const filterConfig = filtersDisponibles[key]
+    if (!filterConfig) continue
 
     if (filterConfig.op === '<_dia_completo') {
       conditions.push(`${filterConfig.expr} < ($${paramIndex}::date + interval '1 day')`)
@@ -40,17 +70,26 @@ const construirReporte = async ({ entidad, columnas, filtros }) => {
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
+  // Orden: solo se permite ordenar por una columna que esté realmente disponible
+  // (whitelist otra vez — nunca se interpola el nombre de columna que manda el cliente sin validar)
+  let ordenClause = config.defaultOrder
+  if (orden_por && columnsDisponibles[orden_por]) {
+    const direccion = orden_dir === 'DESC' ? 'DESC' : 'ASC'
+    ordenClause = `${columnsDisponibles[orden_por].expr} ${direccion}`
+  }
+
   const query = `
     SELECT ${selectClause}
     ${config.baseQuery}
+    ${joinsExtra}
     ${whereClause}
-    ORDER BY ${config.defaultOrder}
+    ORDER BY ${ordenClause}
   `
 
   const { rows } = await pool.query(query, values)
 
   return {
-    columnas: columnasSeleccionadas.map(c => ({ key: c, label: config.columns[c].label })),
+    columnas: columnasSeleccionadas.map(c => ({ key: c, label: columnsDisponibles[c].label })),
     filas: rows
   }
 }
@@ -60,8 +99,17 @@ const getEntidadesDisponibles = () => {
     key,
     label: config.label,
     columnas: Object.entries(config.columns).map(([ck, cv]) => ({ key: ck, label: cv.label })),
-    filtros: Object.keys(config.filters)
+    filtros: Object.keys(config.filters),
+    extensiones: config.extensiones
+      ? Object.entries(config.extensiones).map(([ek, ev]) => ({
+          key: ek,
+          label: ev.label,
+          columnas: Object.entries(ev.columns).map(([ck, cv]) => ({ key: ck, label: cv.label })),
+          filtros: Object.keys(ev.filters || {})
+        }))
+      : []
   }))
 }
 
-module.exports = { construirReporte, getEntidadesDisponibles }
+
+module.exports = { construirReporte, getEntidadesDisponibles, buscarUsuariosParaFiltro }
