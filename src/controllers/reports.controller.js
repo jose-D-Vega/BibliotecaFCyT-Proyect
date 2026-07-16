@@ -1,4 +1,5 @@
-const { construirReporte, getEntidadesDisponibles, buscarUsuariosParaFiltro } = require('../queries/reports.queries')
+const { construirReporte, getEntidadesDisponibles, 
+  buscarUsuariosParaFiltro, buscarLibrosParaFiltro } = require('../queries/reports.queries')
 
 const getConfigReportesHandler = (req, res) => {
   res.json({ entidades: getEntidadesDisponibles() })
@@ -49,4 +50,16 @@ const buscarUsuarioHandler = async (req, res) => {
   }
 }
 
-module.exports = { getConfigReportesHandler, generarReporteHandler, buscarUsuarioHandler }
+const buscarLibroHandler = async (req, res) => {
+  try {
+    const { q } = req.query
+    const libros = await buscarLibrosParaFiltro(q)
+    res.json({ data: libros })
+  } catch (error) {
+    console.error('Error al buscar libros:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
+module.exports = { getConfigReportesHandler, generarReporteHandler, 
+  buscarUsuarioHandler, buscarLibroHandler }

@@ -17,6 +17,22 @@ const buscarUsuariosParaFiltro = async (search) => {
   return rows
 }
 
+// Búsqueda liviana de libros para el filtro "buscar libro" (título o autor),
+// usado en el reporte de ejemplares en vez de tener que conocer el id_libro de memoria.
+const buscarLibrosParaFiltro = async (search) => {
+  if (!search || search.trim().length < 2) return []
+ 
+  const { rows } = await pool.query(
+    `SELECT id_libro, titulo, autor, tipo_material
+     FROM libros
+     WHERE titulo ILIKE $1 OR autor ILIKE $1
+     ORDER BY titulo ASC
+     LIMIT 10`,
+    [`%${search}%`]
+  )
+  return rows
+}
+
 const construirReporte = async ({ entidad, columnas, filtros, extensiones, orden_por, orden_dir }) => {
   const config = REPORT_ENTITIES[entidad]
   if (!config) throw new Error(`Entidad de reporte desconocida: ${entidad}`)
@@ -55,17 +71,34 @@ const construirReporte = async ({ entidad, columnas, filtros, extensiones, orden
   let paramIndex = 1
 
   for (const [key, value] of Object.entries(filtros || {})) {
-    if (value === undefined || value === null || value === '') continue
+    const esVacio = value === undefined || value === null || value === '' ||
+      (Array.isArray(value) && value.length === 0)
+    if (esVacio) continue
+
     const filterConfig = filtersDisponibles[key]
     if (!filterConfig) continue
 
     if (filterConfig.op === '<_dia_completo') {
       conditions.push(`${filterConfig.expr} < ($${paramIndex}::date + interval '1 day')`)
+      values.push(value)
+      paramIndex++
+    } else if (filterConfig.op === 'ILIKE_ANY') {
+      // Soporta selección múltiple: el valor puede venir como string único
+      // (un solo checkbox marcado) o como array (varios), gracias a que Express
+      // parsea automáticamente parámetros de query repetidos (?carrera=a&carrera=b) como array.
+      const valores = Array.isArray(value) ? value : [value]
+      const subCondiciones = valores
+        .filter(v => v !== undefined && v !== null && v !== '')
+        .map(v => {
+          values.push(`%${v}%`)
+          return `${filterConfig.expr} ILIKE $${paramIndex++}`
+        })
+      if (subCondiciones.length > 0) conditions.push(`(${subCondiciones.join(' OR ')})`)
     } else {
       conditions.push(`${filterConfig.expr} ${filterConfig.op} $${paramIndex}`)
+      values.push(value)
+      paramIndex++
     }
-    values.push(value)
-    paramIndex++
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -112,4 +145,4 @@ const getEntidadesDisponibles = () => {
 }
 
 
-module.exports = { construirReporte, getEntidadesDisponibles, buscarUsuariosParaFiltro }
+module.exports = { construirReporte, getEntidadesDisponibles, buscarUsuariosParaFiltro, buscarLibrosParaFiltro }

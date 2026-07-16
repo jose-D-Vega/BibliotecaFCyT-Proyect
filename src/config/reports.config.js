@@ -21,7 +21,7 @@ const REPORT_ENTITIES = {
     },
     filters: {
       tipo_material: { expr: 'l.tipo_material', op: '=' },
-      carrera:       { expr: 'l.carrera', op: '=' },
+      carrera:       { expr: 'l.carrera', op: 'ILIKE_ANY' },
       facultad:      { expr: 'l.facultad', op: '=' },
       activo:        { expr: 'l.activo', op: '=' },
       anio_desde:    { expr: 'l.anio_publicacion', op: '>=' },
@@ -44,7 +44,7 @@ const REPORT_ENTITIES = {
     filters: {
       estado_ejemplar: { expr: 'e.estado_ejemplar', op: '=' },
       tipo_material:   { expr: 'l.tipo_material', op: '=' },
-      carrera:         { expr: 'l.carrera', op: '=' },
+      carrera:         { expr: 'l.carrera', op: 'ILIKE_ANY' },
       id_libro:        { expr: 'l.id_libro', op: '=' }
     },
     defaultOrder: 'l.titulo ASC'
