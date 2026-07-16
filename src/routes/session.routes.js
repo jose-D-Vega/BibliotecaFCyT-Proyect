@@ -1,10 +1,42 @@
 const { Router } = require('express')
+
 const router = Router()
-const { getSesionesHandler } = require('../controllers/session.controller')
+
+const {
+  getSesionesHandler,
+  getMisSesionesActivasHandler,
+  cerrarSesionHandler
+} = require('../controllers/session.controller')
+
+
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin } = require('../middlewares/roles')
 
-// Solo admin puede ver el historial de sesiones
-router.get('/', verifyToken, isAdmin, getSesionesHandler)
+
+
+router.get(
+  '/',
+  verifyToken,
+  isAdmin,
+  getSesionesHandler
+)
+
+
+
+router.get(
+  '/active',
+  verifyToken,
+  getMisSesionesActivasHandler
+)
+
+
+
+router.post(
+  '/logout',
+  verifyToken,
+  cerrarSesionHandler
+)
+
+
 
 module.exports = router
