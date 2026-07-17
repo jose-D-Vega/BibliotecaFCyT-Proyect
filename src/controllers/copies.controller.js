@@ -7,6 +7,7 @@ const {
   deleteCopy
 } = require('../queries/copies.queries')
 const { isValidId } = require('../utils/validators')
+const { registrarActividad } = require('../queries/activity.queries')
 
 const getCopies = async (req, res) => {
   try {
@@ -51,6 +52,15 @@ const addCopy = async (req, res) => {
         return res.status(400).json({ error: 'No se pueden agregar más de 50 ejemplares a la vez' })
       }
       result = await createCopies(id_libro, cantidad)
+
+      registrarActividad({
+        id_usuario: req.user.id_usuario,
+        tipo_accion: 'crear',
+        entidad: 'ejemplares',
+        id_entidad: parseInt(id_libro),
+        descripcion: `Agregó ${cantidad && cantidad > 1 ? cantidad + ' ejemplares' : 'un ejemplar'} al libro #${id_libro}`
+      }).catch(err => console.error('Error al registrar actividad:', err))
+      
       return res.status(201).json({
         message: `${cantidad} ejemplares agregados exitosamente`,
         data: result
@@ -58,6 +68,15 @@ const addCopy = async (req, res) => {
     }
 
     result = await createCopy(id_libro)
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'crear',
+      entidad: 'ejemplares',
+      id_entidad: parseInt(id_libro),
+      descripcion: `Agregó ${cantidad && cantidad > 1 ? cantidad + ' ejemplares' : 'un ejemplar'} al libro #${id_libro}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.status(201).json({ message: 'Ejemplar agregado exitosamente', data: result })
   } catch (error) {
     console.error('Error al agregar ejemplar:', error)
@@ -88,6 +107,15 @@ const updateStatus = async (req, res) => {
     }
 
     const updated = await updateCopyStatus(id, estado_ejemplar)
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'ejemplares',
+      id_entidad: parseInt(id),
+      descripcion: `Cambió el estado del ejemplar #${id} a "${estado_ejemplar}"`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Estado actualizado exitosamente', data: updated })
   } catch (error) {
     console.error('Error al actualizar estado:', error)
@@ -113,6 +141,15 @@ const removeCopy = async (req, res) => {
     }
 
     const deleted = await deleteCopy(id)
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'eliminar',
+      entidad: 'ejemplares',
+      id_entidad: parseInt(id),
+      descripcion: `Dio de baja el ejemplar #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+    
     res.json({ message: 'Ejemplar dado de baja exitosamente', data: deleted })
   } catch (error) {
     console.error('Error al dar de baja ejemplar:', error)

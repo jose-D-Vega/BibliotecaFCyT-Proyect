@@ -8,26 +8,47 @@ const registrarActividad = async ({ id_usuario, tipo_accion, entidad, id_entidad
   )
 }
 
-const getActividades = async ({ id_usuario, tipo_accion, entidad, limit, offset }) => {
+// Builder único de filtros, reutilizado por getActividades y countActividades.
+// prefix permite usar "h." cuando la query tiene JOIN, o "" cuando no.
+const buildActividadesWhere = ({ id_usuario, tipo_accion, entidad, fecha_desde, fecha_hasta }, prefix = '') => {
   const values = []
+  const conditions = []
   let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
 
   if (id_usuario) {
-    whereClause += ` AND h.id_usuario = $${paramIndex}`
+    conditions.push(`${prefix}id_usuario = $${paramIndex}`)
     values.push(id_usuario)
     paramIndex++
   }
   if (tipo_accion) {
-    whereClause += ` AND h.tipo_accion = $${paramIndex}`
+    conditions.push(`${prefix}tipo_accion = $${paramIndex}`)
     values.push(tipo_accion)
     paramIndex++
   }
   if (entidad) {
-    whereClause += ` AND h.entidad = $${paramIndex}`
+    conditions.push(`${prefix}entidad = $${paramIndex}`)
     values.push(entidad)
     paramIndex++
   }
+  if (fecha_desde) {
+    conditions.push(`${prefix}fecha >= $${paramIndex}`)
+    values.push(fecha_desde)
+    paramIndex++
+  }
+  if (fecha_hasta) {
+    // Se suma 1 día para incluir todo el día "hasta" sin exigir hora exacta
+    conditions.push(`${prefix}fecha < ($${paramIndex}::date + interval '1 day')`)
+    values.push(fecha_hasta)
+    paramIndex++
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+  return { whereClause, values, nextParamIndex: paramIndex }
+}
+
+const getActividades = async (filters) => {
+  const { limit, offset } = filters
+  const { whereClause, values, nextParamIndex } = buildActividadesWhere(filters, 'h.')
 
   values.push(limit)
   values.push(offset)
@@ -46,32 +67,14 @@ const getActividades = async ({ id_usuario, tipo_accion, entidad, limit, offset 
      JOIN usuarios u ON h.id_usuario = u.id_usuario
      ${whereClause}
      ORDER BY h.fecha DESC
-     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+     LIMIT $${nextParamIndex} OFFSET $${nextParamIndex + 1}`,
     values
   )
   return rows
 }
 
-const countActividades = async ({ id_usuario, tipo_accion, entidad }) => {
-  const values = []
-  let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
-
-  if (id_usuario) {
-    whereClause += ` AND id_usuario = $${paramIndex}`
-    values.push(id_usuario)
-    paramIndex++
-  }
-  if (tipo_accion) {
-    whereClause += ` AND tipo_accion = $${paramIndex}`
-    values.push(tipo_accion)
-    paramIndex++
-  }
-  if (entidad) {
-    whereClause += ` AND entidad = $${paramIndex}`
-    values.push(entidad)
-    paramIndex++
-  }
+const countActividades = async (filters) => {
+  const { whereClause, values } = buildActividadesWhere(filters, '')
 
   const { rows } = await pool.query(
     `SELECT COUNT(*) FROM historial_actividades ${whereClause}`,

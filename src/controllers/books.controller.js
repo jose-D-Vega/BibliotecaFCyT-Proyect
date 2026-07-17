@@ -66,13 +66,13 @@ const createBookHandler = async (req, res) => {
 
     const book = await createBook({ ...req.body, imagen_url })
 
-    /*await registrarActividad({
+    await registrarActividad({
       id_usuario: req.user.id_usuario,
       tipo_accion: 'crear',
       entidad: 'libros',
       id_entidad: book.id_libro,
       descripcion: `Creó el libro: ${book.titulo}`
-    })*/
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.status(201).json({ message: 'Libro creado exitosamente', data: book })
   } catch (error) {
@@ -106,6 +106,14 @@ const updateBookHandler = async (req, res) => {
     const book = await updateBook(id, updateData)
     if (!book) return res.status(404).json({ error: 'Libro no encontrado o sin cambios' })
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'editar',
+      entidad: 'libros',
+      id_entidad: parseInt(id),
+      descripcion: `Actualizó el libro: ${book.titulo}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Libro actualizado exitosamente', data: book })
   } catch (error) {
     console.error('Error al actualizar libro:', error)
@@ -127,13 +135,13 @@ const deleteBookHandler = async (req, res) => {
     if (!result) return res.status(404).json({ error: 'Libro no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
 
-    /*await registrarActividad({
+    await registrarActividad({
       id_usuario: req.user.id_usuario,
       tipo_accion: 'eliminar',
       entidad: 'libros',
       id_entidad: parseInt(id),
       descripcion: `Eliminó el libro: ${result.titulo}`
-    })*/
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Libro eliminado exitosamente', data: result })
   } catch (error) {

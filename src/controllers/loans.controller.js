@@ -10,6 +10,7 @@ const {
   approveRenewal,
   rejectRenewal
 } = require('../queries/loans.queries')
+const { registrarActividad } = require('../queries/activity.queries')
 
 const createLoanHandler = async (req, res) => {
   try {
@@ -33,6 +34,26 @@ const createLoanHandler = async (req, res) => {
 
     if (result.error) return res.status(400).json({ error: result.error })
 
+    // Puede generarse un préstamo normal, una reserva, o ambos en la misma solicitud
+    if (result.prestamo) {
+      registrarActividad({
+        id_usuario,
+        tipo_accion: 'crear',
+        entidad: 'prestamos',
+        id_entidad: result.prestamo.id_prestamo,
+        descripcion: `Solicitó un préstamo (#${result.prestamo.id_prestamo})`
+      }).catch(err => console.error('Error al registrar actividad:', err))
+    }
+    if (result.reserva) {
+      registrarActividad({
+        id_usuario,
+        tipo_accion: 'crear',
+        entidad: 'prestamos',
+        id_entidad: result.reserva.id_prestamo,
+        descripcion: `Solicitó una reserva (#${result.reserva.id_prestamo})`
+      }).catch(err => console.error('Error al registrar actividad:', err))
+    }
+    
     res.status(201).json({
       message: 'Solicitud creada exitosamente',
       data: result,
@@ -65,6 +86,14 @@ const respondLoanDetailHandler = async (req, res) => {
     if (!result) return res.status(404).json({ error: 'Préstamo o ejemplar no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: estado === 'aprobado' ? 'aprobar' : 'rechazar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `${estado === 'aprobado' ? 'Aprobó' : 'Rechazó'} el ejemplar #${id_ejemplar} del préstamo #${id}${observaciones ? `: ${observaciones}` : ''}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Respuesta registrada exitosamente', data: result })
   } catch (error) {
     console.error('Error al responder préstamo:', error)
@@ -79,6 +108,14 @@ const activateLoanHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'activar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Activó el préstamo #${id} (entrega física)`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Préstamo activado exitosamente', data: result })
   } catch (error) {
@@ -95,6 +132,14 @@ const cancelLoanHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
+    
+    registrarActividad({
+      id_usuario,
+      tipo_accion: 'cancelar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Canceló el préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Préstamo cancelado exitosamente', data: result })
   } catch (error) {
@@ -114,6 +159,15 @@ const cancelLoanSmartHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
+
+    // Agregar un nuevo tipo_accion para la cancelacón de una respuesta
+    registrarActividad({
+      id_usuario,
+      tipo_accion: 'cancelar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Canceló la respuesta del préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({
       message: 'Préstamo cancelado correctamente (reversión aplicada)',
@@ -198,6 +252,14 @@ const renewLoanHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Préstamo no encontrado' })
     if (result.error) return res.status(400).json({ error: result.error })
+    
+    registrarActividad({
+      id_usuario,
+      tipo_accion: 'crear',
+      entidad: 'prestamos',
+      id_entidad: result.nuevo_prestamo?.id_prestamo || parseInt(id),
+      descripcion: `Solicitó renovación del préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({
       message: 'Solicitud de renovación enviada',
@@ -220,6 +282,14 @@ const approveRenewalHandler = async (req, res) => {
     if (!result) return res.status(404).json({ error: 'Renovación no encontrada' })
     if (result.error) return res.status(400).json({ error: result.error })
 
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'aprobar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Aprobó la renovación del préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
     res.json({ message: 'Renovación aprobada exitosamente', data: result })
   } catch (error) {
     console.error('Error al aprobar renovación:', error)
@@ -234,6 +304,14 @@ const rejectRenewalHandler = async (req, res) => {
 
     if (!result) return res.status(404).json({ error: 'Renovación no encontrada' })
     if (result.error) return res.status(400).json({ error: result.error })
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: 'rechazar', 
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Rechazó la renovación del préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Renovación rechazada', data: result })
   } catch (error) {
