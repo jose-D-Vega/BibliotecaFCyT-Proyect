@@ -1,56 +1,123 @@
 const pool = require('../config/db')
 
-const registrarSesion = async (id_usuario) => {
+
+const registrarSesion = async ({
+  id_usuario,
+  sid,
+  ip,
+  user_agent
+}) => {
+
   await pool.query(
     `
     INSERT INTO sesiones (
+      sid,
       id_usuario,
-      activo
+      fecha_ingreso,
+      ultima_actividad,
+      fecha_expiracion,
+      estado,
+      ip,
+      user_agent
     )
-    VALUES ($1, TRUE)
+    VALUES (
+      $1,
+      $2,
+      NOW(),
+      NOW(),
+      NOW() + INTERVAL '8 hours',
+      'Activo',
+      $3,
+      $4
+    )
     `,
-    [id_usuario]
+    [
+      sid,
+      id_usuario,
+      ip,
+      user_agent
+    ]
   )
+
 }
 
-const cerrarSesion = async (id_usuario) => {
+
+
+
+const cerrarSesion = async (sid) => {
+
   await pool.query(
     `
     UPDATE sesiones
     SET
-      activo = FALSE,
+      estado = 'Cerrada',
       fecha_cierre = NOW()
-    WHERE id_sesion = (
-      SELECT id_sesion
-      FROM sesiones
-      WHERE
-        id_usuario = $1
-        AND activo = TRUE
-      ORDER BY fecha_ingreso DESC
-      LIMIT 1
-    )
+    WHERE sid = $1
+      AND estado = 'Activo'
     `,
-    [id_usuario]
+    [
+      sid
+    ]
   )
+
 }
 
-const getSesionesActivasUsuario = async (id_usuario) => {
+const actualizarSesionesExpiradas = async () => {
+
+  const { rowCount } = await pool.query(
+    `
+    UPDATE sesiones
+    SET
+      estado = 'Expirada',
+      fecha_cierre = NOW()
+    WHERE
+      estado = 'Activo'
+      AND fecha_expiracion < NOW()
+    `
+  )
+
+
+  return rowCount
+
+}
+
+
+const getSesionesActivasUsuario = async (id_usuario,sid_actual) => {
+
   const { rows } = await pool.query(
     `
     SELECT
       id_sesion,
-      fecha_ingreso
+      sid,
+      fecha_ingreso,
+      ultima_actividad,
+      estado,
+      ip,
+      user_agent,
+      CASE
+        WHEN sid = $2 THEN true
+        ELSE false
+      END AS es_actual
     FROM sesiones
     WHERE
       id_usuario = $1
-      AND activo = TRUE
+      AND estado = 'Activo'
     ORDER BY fecha_ingreso DESC
     `,
-    [id_usuario]
+    [
+      id_usuario,
+      sid_actual
+    ]
   )
 
+
   return rows
+
 }
+
+
+
+
 
 const getSesiones = async ({
   usuario,
@@ -61,8 +128,12 @@ const getSesiones = async ({
 }) => {
 
   const values = []
+
   let paramIndex = 1
+
   let whereClause = 'WHERE 1=1'
+
+
 
   if (usuario) {
 
@@ -75,9 +146,12 @@ const getSesiones = async ({
     `
 
     values.push(`%${usuario}%`)
+
     paramIndex++
 
   }
+
+
 
   if (fecha_desde) {
 
@@ -86,9 +160,12 @@ const getSesiones = async ({
     `
 
     values.push(fecha_desde)
+
     paramIndex++
 
   }
+
+
 
   if (fecha_hasta) {
 
@@ -97,24 +174,38 @@ const getSesiones = async ({
     `
 
     values.push(fecha_hasta)
+
     paramIndex++
 
   }
 
+
+
+
   values.push(limit)
+
   values.push(offset)
+
+
 
   const { rows } = await pool.query(
     `
     SELECT
       s.id_sesion,
+      s.sid,
       s.fecha_ingreso,
-      s.activo,
+      s.ultima_actividad,
+      s.fecha_expiracion,
       s.fecha_cierre,
+      s.estado,
+      s.ip,
+      s.user_agent,
+
       u.id_usuario,
       u.nombre_apellido AS usuario,
       u.ci,
       u.correo,
+
       t.nombre_tipo AS rol
 
     FROM sesiones s
@@ -125,9 +216,12 @@ const getSesiones = async ({
     JOIN tipo_usuarios t
       ON u.id_tipo_usuario = t.id_tipo_usuario
 
+
     ${whereClause}
 
+
     ORDER BY s.fecha_ingreso DESC
+
 
     LIMIT $${paramIndex}
     OFFSET $${paramIndex + 1}
@@ -135,8 +229,15 @@ const getSesiones = async ({
     values
   )
 
+
   return rows
+
 }
+
+
+
+
+
 
 const countSesiones = async ({
   usuario,
@@ -144,11 +245,17 @@ const countSesiones = async ({
   fecha_hasta
 }) => {
 
+
   const values = []
+
   let paramIndex = 1
+
   let whereClause = 'WHERE 1=1'
 
+
+
   if (usuario) {
+
 
     whereClause += `
       AND (
@@ -158,32 +265,52 @@ const countSesiones = async ({
       )
     `
 
+
     values.push(`%${usuario}%`)
+
     paramIndex++
+
 
   }
 
+
+
+
   if (fecha_desde) {
+
 
     whereClause += `
       AND s.fecha_ingreso >= $${paramIndex}
     `
 
+
     values.push(fecha_desde)
+
     paramIndex++
+
 
   }
 
+
+
+
   if (fecha_hasta) {
+
 
     whereClause += `
       AND s.fecha_ingreso < ($${paramIndex}::date + INTERVAL '1 day')
     `
 
+
     values.push(fecha_hasta)
+
     paramIndex++
 
+
   }
+
+
+
 
   const { rows } = await pool.query(
     `
@@ -194,17 +321,25 @@ const countSesiones = async ({
     JOIN usuarios u
       ON s.id_usuario = u.id_usuario
 
+
     ${whereClause}
     `,
     values
   )
 
+
+
   return parseInt(rows[0].count)
+
 }
+
+
+
 
 module.exports = {
   registrarSesion,
   cerrarSesion,
+  actualizarSesionesExpiradas,
   getSesionesActivasUsuario,
   getSesiones,
   countSesiones
