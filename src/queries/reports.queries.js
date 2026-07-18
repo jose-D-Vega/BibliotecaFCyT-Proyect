@@ -3,14 +3,19 @@ const { REPORT_ENTITIES } = require('../config/reports.config')
 
 // Búsqueda liviana de usuarios para los filtros de tipo "buscar usuario" del frontend.
 // Query propia (no reutiliza getAllUsers) porque acá también necesitamos buscar por CI,
-const buscarUsuariosParaFiltro = async (search) => {
+const buscarUsuariosParaFiltro = async (search, soloStaff) => {
   if (!search || search.trim().length < 2) return []
 
+  const filtroRol = soloStaff
+    ? `AND tu.nombre_tipo IN ('bibliotecario', 'admin')`
+    : ''
+
   const { rows } = await pool.query(
-    `SELECT id_usuario, nombre_apellido, correo, ci
-     FROM usuarios
-     WHERE nombre_apellido ILIKE $1 OR correo ILIKE $1 OR ci ILIKE $1
-     ORDER BY nombre_apellido ASC
+    `SELECT u.id_usuario, u.nombre_apellido, u.correo, u.ci
+     FROM usuarios u
+     JOIN tipo_usuarios tu ON tu.id_tipo_usuario = u.id_tipo_usuario
+     WHERE (u.nombre_apellido ILIKE $1 OR u.correo ILIKE $1 OR u.ci ILIKE $1) ${filtroRol}
+     ORDER BY u.nombre_apellido ASC
      LIMIT 10`,
     [`%${search}%`]
   )
@@ -82,18 +87,16 @@ const construirReporte = async ({ entidad, columnas, filtros, extensiones, orden
       conditions.push(`${filterConfig.expr} < ($${paramIndex}::date + interval '1 day')`)
       values.push(value)
       paramIndex++
-    } else if (filterConfig.op === 'ILIKE_ANY') {
-      // Soporta selección múltiple: el valor puede venir como string único
-      // (un solo checkbox marcado) o como array (varios), gracias a que Express
-      // parsea automáticamente parámetros de query repetidos (?carrera=a&carrera=b) como array.
+    } else if (filterConfig.op === 'IN_ANY') {
       const valores = Array.isArray(value) ? value : [value]
-      const subCondiciones = valores
-        .filter(v => v !== undefined && v !== null && v !== '')
-        .map(v => {
-          values.push(`%${v}%`)
-          return `${filterConfig.expr} ILIKE $${paramIndex++}`
-        })
-      if (subCondiciones.length > 0) conditions.push(`(${subCondiciones.join(' OR ')})`)
+      const validos = valores.filter(v => v !== undefined && v !== null && v !== '')
+      if (validos.length === 0) continue
+
+      const placeholders = validos.map(v => {
+        values.push(v)
+        return `$${paramIndex++}`
+      })
+      conditions.push(`${filterConfig.expr} IN (${placeholders.join(', ')})`)
     } else {
       conditions.push(`${filterConfig.expr} ${filterConfig.op} $${paramIndex}`)
       values.push(value)

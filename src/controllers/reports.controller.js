@@ -41,8 +41,8 @@ const generarReporteHandler = async (req, res) => {
 
 const buscarUsuarioHandler = async (req, res) => {
   try {
-    const { q } = req.query
-    const usuarios = await buscarUsuariosParaFiltro(q)
+    const { q, staff } = req.query
+    const usuarios = await buscarUsuariosParaFiltro(q, staff === '1')
     res.json({ data: usuarios })
   } catch (error) {
     console.error('Error al buscar usuarios:', error)
