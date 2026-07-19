@@ -181,7 +181,7 @@ const cancelLoanSmartHandler = async (req, res) => {
 
 const getLoansHandler = async (req, res) => {
   try {
-    const { estado, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
+    const { estado, estados, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
     const parsedLimit = parseInt(limit)
     const parsedPage = parseInt(page)
     const offset = (parsedPage - 1) * parsedLimit
@@ -195,9 +195,18 @@ const getLoansHandler = async (req, res) => {
       : req.query.id_usuario // puede ser undefined para ver todos
 
     const esReservaFilter = es_reserva !== undefined ? es_reserva === 'true' : undefined
+
+    // `estados` permite filtrar por varios estados a la vez (ej: las 3 variantes de
+    // "solicitud" en la pestaña de Solicitudes), separados por coma: ?estados=a,b,c
+    // Si viene vacío o no se envía, no se aplica este filtro (se usa `estado` singular si está).
+    const estadosFilter = estados
+      ? estados.split(',').map(e => e.trim()).filter(Boolean)
+      : undefined
+
     const filters = {
       id_usuario,
       estado,
+      estados: estadosFilter,
       es_reserva: esReservaFilter,
       fecha_desde,
       fecha_hasta,
