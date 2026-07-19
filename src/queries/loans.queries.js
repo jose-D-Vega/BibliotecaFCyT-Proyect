@@ -302,6 +302,141 @@ const respondLoanDetail = async (id_prestamo, id_ejemplar, estado, id_biblioteca
   }
 }
 
+// Respuesta en LOTE — aprueba/rechaza todos los ejemplares de una solicitud
+// en una única transacción y una única conexión al pool. Reemplaza el patrón
+// de llamar a respondLoanDetail() una vez por ejemplar desde el frontend, que
+// bajo concurrencia (varias solicitudes con muchos ejemplares a la vez) podía
+// agotar el pool de conexiones (cada llamada individual usaba hasta 3 conexiones
+// propias: la transacción + la notificación + el registro de actividad).
+// `respuestas` = [{ id_ejemplar, estado, observaciones }]
+const respondLoanDetailsBatch = async (id_prestamo, respuestas, id_bibliotecario) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    // Antes de tocar nada: si se va a aprobar algún ejemplar, verificar sanciones
+    // primero — así, si el usuario está sancionado, no se aplica ningún cambio
+    // (atomicidad real: todo o nada, en vez de quedar en un estado mezclado).
+    const seApruebaAlgo = respuestas.some(r => r.estado === 'aprobado')
+    if (seApruebaAlgo) {
+      const { rows: prestamoPrevio } = await client.query(
+        `SELECT id_usuario FROM prestamos WHERE id_prestamo = $1`,
+        [id_prestamo]
+      )
+      if (prestamoPrevio.length === 0) {
+        await client.query('ROLLBACK')
+        return null
+      }
+      const { rows: usuarioData } = await client.query(
+        `SELECT sancionado FROM usuarios WHERE id_usuario = $1`,
+        [prestamoPrevio[0].id_usuario]
+      )
+      if (usuarioData[0]?.sancionado) {
+        await client.query('ROLLBACK')
+        return { error: 'El usuario tiene sanciones activas. No se puede aprobar el préstamo hasta que regularice su situación.' }
+      }
+    }
+
+    // Aplicar todas las respuestas, reutilizando la MISMA conexión para cada UPDATE
+    // (nada de pool.connect() por ejemplar)
+    for (const r of respuestas) {
+      const { rows } = await client.query(
+        `UPDATE detalles_prestamos
+         SET estado_prestamo_ejemplar = $1,
+             observaciones = $4
+         WHERE id_prestamo = $2 AND id_ejemplar = $3
+         RETURNING id_ejemplar`,
+        [r.estado, id_prestamo, r.id_ejemplar, r.observaciones || '']
+      )
+      if (rows.length === 0) {
+        await client.query('ROLLBACK')
+        return null
+      }
+    }
+
+    // Recalcular estado del préstamo según todos sus detalles (una sola vez, al final)
+    const { rows: detalles } = await client.query(
+      `SELECT estado_prestamo_ejemplar FROM detalles_prestamos
+       WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+
+    const estados = detalles.map(d => d.estado_prestamo_ejemplar)
+    const todosAprobados = estados.every(e => e === 'aprobado')
+    const todosRechazados = estados.every(e => e === 'rechazado')
+
+    const { rows: prestamoData } = await client.query(
+      `SELECT * FROM prestamos WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+
+    const esReserva = prestamoData[0].es_reserva
+    const estadoActual = prestamoData[0].estado_prestamo
+
+    const reservaEnRondaFinal = esReserva &&
+      ['reserva_aprobada', 'reserva_parcialmente_aprobada'].includes(estadoActual)
+
+    let nuevoEstado
+    if (todosAprobados) {
+      if (esReserva && !reservaEnRondaFinal) nuevoEstado = 'reserva_aprobada'
+      else nuevoEstado = 'aprobado'
+    } else if (todosRechazados) {
+      if (esReserva && !reservaEnRondaFinal) nuevoEstado = 'reserva_rechazada'
+      else nuevoEstado = 'rechazado'
+    } else {
+      nuevoEstado = (esReserva && !reservaEnRondaFinal) ? 'reserva_parcialmente_aprobada' : 'parcialmente_aprobado'
+    }
+
+    const { rows: prestamo_actualizado } = await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = $1::varchar,
+           fecha_respuesta = NOW(),
+           id_bibliotecario = $2
+       WHERE id_prestamo = $3
+       RETURNING *`,
+      [nuevoEstado, id_bibliotecario, id_prestamo]
+    )
+
+    // Una sola notificación resumiendo el resultado final (no una por ejemplar)
+    const notifPorEstado = {
+      aprobado: { tipo: 'prestamo_aprobado', titulo: 'Préstamo aprobado', mensaje: 'Tu solicitud de préstamo fue aprobada. Acercate a la biblioteca a retirar los materiales.' },
+      parcialmente_aprobado: { tipo: 'prestamo_parcial', titulo: 'Préstamo parcialmente aprobado', mensaje: 'Parte de tu solicitud de préstamo fue aprobada. Revisá el detalle para ver qué materiales fueron aceptados.' },
+      rechazado: { tipo: 'prestamo_rechazado', titulo: 'Préstamo rechazado', mensaje: 'Tu solicitud de préstamo fue rechazada.' },
+      reserva_aprobada: { tipo: 'reserva_aprobada', titulo: 'Reserva aprobada', mensaje: 'Tu solicitud de reserva fue aprobada. Te avisaremos cuando el material esté disponible para retirar.' },
+      reserva_parcialmente_aprobada: { tipo: 'reserva_parcial', titulo: 'Reserva parcialmente aprobada', mensaje: 'Parte de tu solicitud de reserva fue aprobada. Te avisaremos cuando los materiales aceptados estén disponibles para retirar.' },
+      reserva_rechazada: { tipo: 'reserva_rechazada', titulo: 'Reserva rechazada', mensaje: 'Tu solicitud de reserva fue rechazada.' }
+    }
+
+    // Ronda 2 de reserva (entrega final) tiene sus propios mensajes, distintos
+    // a los de un préstamo común aunque el nuevoEstado tenga el mismo nombre
+    const notif = reservaEnRondaFinal
+      ? {
+          aprobado: { tipo: 'reserva_disponible', titulo: 'Tu reserva está disponible', mensaje: 'Los materiales de tu reserva ya están listos para retirar. Acercate a la biblioteca.' },
+          parcialmente_aprobado: { tipo: 'reserva_disponible', titulo: 'Parte de tu reserva está disponible', mensaje: 'Parte de los materiales de tu reserva ya están listos para retirar. Revisá el detalle.' },
+          rechazado: { tipo: 'reserva_rechazada', titulo: 'Reserva rechazada', mensaje: 'Tu reserva fue rechazada en la instancia final.' }
+        }[nuevoEstado]
+      : notifPorEstado[nuevoEstado]
+
+    if (notif) {
+      await crearNotificacion({
+        id_usuario: prestamoData[0].id_usuario,
+        tipo: notif.tipo,
+        titulo: notif.titulo,
+        mensaje: notif.mensaje,
+        id_prestamo
+      })
+    }
+
+    await client.query('COMMIT')
+    return { prestamo: prestamo_actualizado[0] }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 // Activar préstamo — usuario retira todos los ejemplares aprobados
 const activateLoan = async (id_prestamo, id_bibliotecario_activacion) => {
   const client = await pool.connect()
@@ -1043,6 +1178,7 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
 module.exports = {
   createLoan,
   respondLoanDetail,
+  respondLoanDetailsBatch,
   activateLoan,
   cancelLoan,
   cancelLoanSmart,
