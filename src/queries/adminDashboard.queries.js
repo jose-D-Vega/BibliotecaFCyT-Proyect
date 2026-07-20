@@ -23,12 +23,10 @@ const getAdminDashboardStats = async () => {
     pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'vencido'`),
 
     pool.query(
-      `SELECT COUNT(*) FROM prestamos
-       WHERE estado_prestamo = 'activo'
-         AND fecha_tope_devolucion::date <= (CURRENT_DATE + $1::int)
-         AND fecha_tope_devolucion::date >= CURRENT_DATE`,
-      [DIAS_POR_VENCER]
-    ),
+  `SELECT COUNT(*) FROM prestamos
+   WHERE estado_prestamo = 'devuelto'
+     AND fecha_devolucion_real::date = CURRENT_DATE`
+),
 
     pool.query(
       `SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'solicitud_reserva'`
