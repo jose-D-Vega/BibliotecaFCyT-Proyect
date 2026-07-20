@@ -1,6 +1,7 @@
 const {
   createLoan,
   respondLoanDetail,
+  respondLoanDetailsBatch,
   activateLoan,
   cancelLoan,
   getLoans,
@@ -101,6 +102,49 @@ const respondLoanDetailHandler = async (req, res) => {
   }
 }
 
+// Versión en lote: aprueba/rechaza todos los ejemplares de una solicitud en
+// una sola petición, evitando disparar N requests en paralelo desde el
+// frontend (lo cual saturaba el pool de conexiones bajo concurrencia).
+const respondLoanDetailsBatchHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const { respuestas } = req.body // [{ id_ejemplar, estado, observaciones }]
+
+    if (!Array.isArray(respuestas) || respuestas.length === 0) {
+      return res.status(400).json({ error: 'Debe enviar al menos una respuesta' })
+    }
+
+    const estadosValidos = ['aprobado', 'rechazado']
+    const invalido = respuestas.find(r => !estadosValidos.includes(r.estado))
+    if (invalido) {
+      return res.status(400).json({ error: 'Estado inválido. Debe ser aprobado o rechazado' })
+    }
+
+    const result = await respondLoanDetailsBatch(id, respuestas, req.user.id_usuario)
+
+    if (!result) return res.status(404).json({ error: 'Préstamo o algún ejemplar no encontrado' })
+    if (result.error) return res.status(400).json({ error: result.error })
+
+    const aprobados = respuestas.filter(r => r.estado === 'aprobado').length
+    const rechazados = respuestas.filter(r => r.estado === 'rechazado').length
+
+    registrarActividad({
+      id_usuario: req.user.id_usuario,
+      tipo_accion: aprobados > 0 && rechazados > 0
+        ? 'editar'
+        : (aprobados > 0 ? 'aprobar' : 'rechazar'),
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Respondió el préstamo #${id}: ${aprobados} ejemplar(es) aprobado(s), ${rechazados} rechazado(s)`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
+    res.json({ message: 'Respuestas registradas exitosamente', data: result })
+  } catch (error) {
+    console.error('Error al responder préstamo (batch):', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 const activateLoanHandler = async (req, res) => {
   try {
     const { id } = req.params
@@ -181,7 +225,7 @@ const cancelLoanSmartHandler = async (req, res) => {
 
 const getLoansHandler = async (req, res) => {
   try {
-    const { estado, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
+    const { estado, estados, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
     const parsedLimit = parseInt(limit)
     const parsedPage = parseInt(page)
     const offset = (parsedPage - 1) * parsedLimit
@@ -195,9 +239,18 @@ const getLoansHandler = async (req, res) => {
       : req.query.id_usuario // puede ser undefined para ver todos
 
     const esReservaFilter = es_reserva !== undefined ? es_reserva === 'true' : undefined
+
+    // `estados` permite filtrar por varios estados a la vez (ej: las 3 variantes de
+    // "solicitud" en la pestaña de Solicitudes), separados por coma: ?estados=a,b,c
+    // Si viene vacío o no se envía, no se aplica este filtro (se usa `estado` singular si está).
+    const estadosFilter = estados
+      ? estados.split(',').map(e => e.trim()).filter(Boolean)
+      : undefined
+
     const filters = {
       id_usuario,
       estado,
+      estados: estadosFilter,
       es_reserva: esReservaFilter,
       fecha_desde,
       fecha_hasta,
@@ -323,6 +376,7 @@ const rejectRenewalHandler = async (req, res) => {
 module.exports = {
   createLoanHandler,
   respondLoanDetailHandler,
+  respondLoanDetailsBatchHandler,
   activateLoanHandler,
   cancelLoanHandler,
   cancelLoanSmartHandler,

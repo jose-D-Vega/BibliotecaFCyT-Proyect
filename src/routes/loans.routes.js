@@ -3,6 +3,7 @@ const router = Router()
 const {
   createLoanHandler,
   respondLoanDetailHandler,
+  respondLoanDetailsBatchHandler,
   activateLoanHandler,
   cancelLoanHandler,
   cancelLoanSmartHandler,
@@ -27,6 +28,7 @@ router.patch('/:id/renew/reject', verifyToken, isBibliotecario, rejectRenewalHan
 
 // Gestión de préstamos — bibliotecario y admin
 router.patch('/:id/detalle/:id_ejemplar', verifyToken, isBibliotecario, respondLoanDetailHandler)
+router.patch('/:id/detalle-batch', verifyToken, isBibliotecario, respondLoanDetailsBatchHandler)
 router.patch('/:id/activate', verifyToken, isBibliotecario, activateLoanHandler)
 
 module.exports = router

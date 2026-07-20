@@ -88,6 +88,13 @@ CREATE TABLE public.sesiones (
   id_sesion integer GENERATED ALWAYS AS IDENTITY NOT NULL,
   id_usuario integer NOT NULL,
   fecha_ingreso timestamp with time zone NOT NULL DEFAULT now(),
+  fecha_cierre timestamp with time zone,
+  sid uuid,
+  ultima_actividad timestamp with time zone,
+  fecha_expiracion timestamp with time zone,
+  estado character varying CHECK (estado::text = ANY (ARRAY['Activo'::character varying, 'Cerrada'::character varying, 'Expirada'::character varying, 'Revocada'::character varying]::text[])),
+  ip character varying,
+  user_agent text,
   CONSTRAINT sesiones_pkey PRIMARY KEY (id_sesion),
   CONSTRAINT id_usuario_sesion FOREIGN KEY (id_usuario) REFERENCES public.usuarios(id_usuario)
 );

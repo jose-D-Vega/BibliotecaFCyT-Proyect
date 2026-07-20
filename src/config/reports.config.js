@@ -21,7 +21,7 @@ const REPORT_ENTITIES = {
     },
     filters: {
       tipo_material: { expr: 'l.tipo_material', op: '=' },
-      carrera:       { expr: 'l.carrera', op: '=' },
+      carrera:       { expr: 'l.carrera', op: 'ILIKE_ANY' },
       facultad:      { expr: 'l.facultad', op: '=' },
       activo:        { expr: 'l.activo', op: '=' },
       anio_desde:    { expr: 'l.anio_publicacion', op: '>=' },
@@ -42,9 +42,9 @@ const REPORT_ENTITIES = {
       estado_ejemplar: { label: 'Estado', expr: 'e.estado_ejemplar' }
     },
     filters: {
-      estado_ejemplar: { expr: 'e.estado_ejemplar', op: '=' },
+      estado_ejemplar: { expr: 'e.estado_ejemplar', op: 'IN_ANY' },
       tipo_material:   { expr: 'l.tipo_material', op: '=' },
-      carrera:         { expr: 'l.carrera', op: '=' },
+      carrera:         { expr: 'l.carrera', op: 'ILIKE_ANY' },
       id_libro:        { expr: 'l.id_libro', op: '=' }
     },
     defaultOrder: 'l.titulo ASC'
@@ -52,30 +52,56 @@ const REPORT_ENTITIES = {
 
   prestamos: {
     label: 'Préstamos',
-    baseQuery: `
+      baseQuery: `
       FROM prestamos p
       JOIN usuarios u ON u.id_usuario = p.id_usuario
       LEFT JOIN usuarios b ON b.id_usuario = p.id_bibliotecario
+      LEFT JOIN usuarios ba ON ba.id_usuario = p.id_bibliotecario_activacion
     `,
     columns: {
-      id_prestamo:           { label: 'N° Préstamo', expr: 'p.id_prestamo' },
-      usuario:               { label: 'Usuario', expr: 'u.nombre_apellido' },
-      correo_usuario:        { label: 'Correo', expr: 'u.correo' },
-      bibliotecario:         { label: 'Gestionado por', expr: 'b.nombre_apellido' },
-      estado_prestamo:       { label: 'Estado', expr: 'p.estado_prestamo' },
-      es_reserva:            { label: 'Es reserva', expr: 'p.es_reserva' },
-      fecha_solicitud:       { label: 'Fecha solicitud', expr: 'p.fecha_solicitud' },
-      fecha_tope_devolucion: { label: 'Fecha tope', expr: 'p.fecha_tope_devolucion' },
-      fecha_activacion:      { label: 'Fecha activación', expr: 'p.fecha_activacion' }
+      id_prestamo:             { label: 'N° Préstamo', expr: 'p.id_prestamo' },
+      usuario:                 { label: 'Usuario', expr: 'u.nombre_apellido' },
+      correo_usuario:          { label: 'Correo', expr: 'u.correo' },
+      bibliotecario_respuesta:  { label: 'Respondido por', expr: 'b.nombre_apellido' },
+      bibliotecario_activacion: { label: 'Activado por', expr: 'ba.nombre_apellido' },
+      estado_prestamo:         { label: 'Estado', expr: 'p.estado_prestamo' },
+      es_reserva:              { label: 'Es reserva', expr: 'p.es_reserva' },
+      fecha_solicitud:         { label: 'Fecha solicitud', expr: 'p.fecha_solicitud' },
+      fecha_respuesta:         { label: 'Fecha respuesta', expr: 'p.fecha_respuesta' },
+      fecha_activacion:        { label: 'Fecha activación', expr: 'p.fecha_activacion' },
+      fecha_tope_devolucion:   { label: 'Fecha tope devolución', expr: 'p.fecha_tope_devolucion' },
+      fecha_cancelacion:       { label: 'Fecha cancelación', expr: 'p.fecha_cancelacion' }
     },
     filters: {
-      id_usuario:      { expr: 'p.id_usuario', op: '=' },
-      estado_prestamo: { expr: 'p.estado_prestamo', op: '=' },
-      es_reserva:      { expr: 'p.es_reserva', op: '=' },
-      fecha_desde:     { expr: 'p.fecha_solicitud', op: '>=' },
-      fecha_hasta:     { expr: 'p.fecha_solicitud', op: '<_dia_completo' }
+      id_usuario:                  { expr: 'p.id_usuario', op: '=' },
+      id_bibliotecario:            { expr: 'p.id_bibliotecario', op: '=' },
+      id_bibliotecario_activacion: { expr: 'p.id_bibliotecario_activacion', op: '=' },
+      estado_prestamo:             { expr: 'p.estado_prestamo', op: 'IN_ANY' },
+      es_reserva:                  { expr: 'p.es_reserva', op: '=' },
+      fecha_desde:                 { expr: 'p.fecha_solicitud', op: '>=' },
+      fecha_hasta:                 { expr: 'p.fecha_solicitud', op: '<_dia_completo' }
     },
-    defaultOrder: 'p.fecha_solicitud DESC'
+    defaultOrder: 'p.fecha_solicitud DESC',
+    extensiones: {
+      ultima_devolucion: {
+        label: 'Última devolución registrada',
+        joinClause: `
+          LEFT JOIN LATERAL (
+            SELECT dv.fecha_devolucion, ub.nombre_apellido AS bibliotecario_devolucion
+            FROM devoluciones dv
+            JOIN usuarios ub ON ub.id_usuario = dv.id_bibliotecario
+            WHERE dv.id_prestamo = p.id_prestamo
+            ORDER BY dv.fecha_devolucion DESC
+            LIMIT 1
+          ) ud ON true
+        `,
+        columns: {
+          ultima_fecha_devolucion:  { label: 'Última fecha de devolución', expr: 'ud.fecha_devolucion' },
+          bibliotecario_devolucion: { label: 'Registrado por (devolución)', expr: 'ud.bibliotecario_devolucion' }
+        },
+        filters: {}
+      }
+    }
   },
 
   // Entidad "ancla" para combinaciones: cada ítem individual de un préstamo,
@@ -94,6 +120,7 @@ const REPORT_ENTITIES = {
       id_ejemplar:               { label: 'N° Ejemplar', expr: 'dp.id_ejemplar' },
       titulo:                    { label: 'Título', expr: 'l.titulo' },
       usuario:                   { label: 'Usuario', expr: 'u.nombre_apellido' },
+      correo_usuario:            { label: 'Correo', expr: 'u.correo' },
       estado_prestamo_ejemplar:  { label: 'Estado del ítem', expr: 'dp.estado_prestamo_ejemplar' },
       es_reserva:                { label: 'Es reserva', expr: 'dp.es_reserva' },
       observaciones:             { label: 'Observaciones', expr: 'dp.observaciones' },
@@ -102,13 +129,31 @@ const REPORT_ENTITIES = {
     filters: {
       id_usuario:               { expr: 'p.id_usuario', op: '=' },
       id_prestamo:              { expr: 'dp.id_prestamo', op: '=' },
-      estado_prestamo_ejemplar: { expr: 'dp.estado_prestamo_ejemplar', op: '=' },
+      id_libro:                 { expr: 'l.id_libro', op: '=' },
+      estado_prestamo_ejemplar: { expr: 'dp.estado_prestamo_ejemplar', op: 'IN_ANY' },
       es_reserva:               { expr: 'dp.es_reserva', op: '=' },
       fecha_desde:              { expr: 'p.fecha_solicitud', op: '>=' },
       fecha_hasta:              { expr: 'p.fecha_solicitud', op: '<_dia_completo' }
     },
     defaultOrder: 'p.fecha_solicitud DESC',
     extensiones: {
+      prestamo: {
+        label: 'Incluir datos del préstamo',
+        joinClause: `
+          LEFT JOIN usuarios bib_resp ON bib_resp.id_usuario = p.id_bibliotecario
+          LEFT JOIN usuarios bib_act ON bib_act.id_usuario = p.id_bibliotecario_activacion
+        `,
+        columns: {
+          fecha_respuesta:             { label: 'Fecha de respuesta', expr: 'p.fecha_respuesta' },
+          fecha_activacion:            { label: 'Fecha de activación', expr: 'p.fecha_activacion' },
+          bibliotecario_respuesta:     { label: 'Respondido por', expr: 'bib_resp.nombre_apellido' },
+          bibliotecario_activacion:    { label: 'Activado por', expr: 'bib_act.nombre_apellido' }
+        },
+        filters: {
+          id_bibliotecario:            { expr: 'p.id_bibliotecario', op: '=' },
+          id_bibliotecario_activacion: { expr: 'p.id_bibliotecario_activacion', op: '=' }
+        }
+      },
       devolucion: {
         label: 'Incluir datos de devolución',
         joinClause: `
@@ -123,7 +168,8 @@ const REPORT_ENTITIES = {
           bibliotecario_devolucion: { label: 'Recibido por', expr: 'bib_dev.nombre_apellido' }
         },
         filters: {
-          estado_devuelto: { expr: 'dev.estado_devuelto', op: '=' }
+          estado_devuelto:  { expr: 'dev.estado_devuelto', op: 'IN_ANY' },
+          id_bibliotecario_devolucion: { expr: 'dev.id_bibliotecario', op: '=' }
         }
       },
       sancion: {
@@ -131,16 +177,20 @@ const REPORT_ENTITIES = {
         joinClause: `
           LEFT JOIN sanciones s
             ON s.id_prestamo = dp.id_prestamo AND s.id_ejemplar = dp.id_ejemplar
+          LEFT JOIN usuarios bib_san ON bib_san.id_usuario = s.id_admin
         `,
         columns: {
-          tipo_infraccion: { label: 'Tipo de infracción', expr: 's.tipo_infraccion' },
-          estado_sancion:  { label: 'Estado de la sanción', expr: 's.estado_sancion' },
-          fecha_sancion:   { label: 'Fecha de sanción', expr: 's.fecha_sancion' },
-          dias_suspension: { label: 'Días de suspensión', expr: 's.dias_suspension' }
+          tipo_infraccion:     { label: 'Tipo de infracción', expr: 's.tipo_infraccion' },
+          estado_sancion:      { label: 'Estado de la sanción', expr: 's.estado_sancion' },
+          descripcion_sancion: { label: 'Descripción de la sanción', expr: 's.descripcion_sancion' },
+          fecha_sancion:       { label: 'Fecha de sanción', expr: 's.fecha_sancion' },
+          dias_suspension:     { label: 'Días de suspensión', expr: 's.dias_suspension' },
+          bibliotecario_sancion: { label: 'Registrado por', expr: 'bib_san.nombre_apellido' }
         },
         filters: {
-          estado_sancion:  { expr: 's.estado_sancion', op: '=' },
-          tipo_infraccion: { expr: 's.tipo_infraccion', op: '=' }
+          estado_sancion:   { expr: 's.estado_sancion', op: 'IN_ANY' },
+          tipo_infraccion:  { expr: 's.tipo_infraccion', op: 'IN_ANY' },
+          id_admin:         { expr: 's.id_admin', op: '=' }
         }
       }
     }
@@ -168,7 +218,10 @@ const REPORT_ENTITIES = {
     },
     filters: {
       id_usuario:       { expr: 'p.id_usuario', op: '=' },
-      estado_devuelto:  { expr: 'dev.estado_devuelto', op: '=' },
+      id_prestamo:      { expr: 'dev.id_prestamo', op: '=' },
+      id_libro:         { expr: 'l.id_libro', op: '=' },
+      id_bibliotecario_devolucion: { expr: 'dev.id_bibliotecario', op: '=' },
+      estado_devuelto:  { expr: 'dev.estado_devuelto', op: 'IN_ANY' },
       fecha_desde:      { expr: 'dev.fecha_devolucion', op: '>=' },
       fecha_hasta:      { expr: 'dev.fecha_devolucion', op: '<_dia_completo' }
     },
@@ -177,21 +230,28 @@ const REPORT_ENTITIES = {
 
   sanciones: {
     label: 'Sanciones',
-    baseQuery: `FROM sanciones s JOIN usuarios u ON u.id_usuario = s.id_usuario`,
+    baseQuery: `
+      FROM sanciones s
+      JOIN usuarios u ON u.id_usuario = s.id_usuario
+      LEFT JOIN usuarios admin ON admin.id_usuario = s.id_admin
+    `,
     columns: {
-      id_sancion:      { label: 'N° Sanción', expr: 's.id_sancion' },
-      usuario:         { label: 'Usuario', expr: 'u.nombre_apellido' },
-      tipo_infraccion: { label: 'Tipo de infracción', expr: 's.tipo_infraccion' },
-      estado_sancion:  { label: 'Estado', expr: 's.estado_sancion' },
-      fecha_sancion:   { label: 'Fecha', expr: 's.fecha_sancion' },
-      dias_suspension: { label: 'Días de suspensión', expr: 's.dias_suspension' }
+      id_sancion:            { label: 'N° Sanción', expr: 's.id_sancion' },
+      usuario:               { label: 'Usuario', expr: 'u.nombre_apellido' },
+      tipo_infraccion:       { label: 'Tipo de infracción', expr: 's.tipo_infraccion' },
+      estado_sancion:        { label: 'Estado', expr: 's.estado_sancion' },
+      fecha_sancion:         { label: 'Fecha', expr: 's.fecha_sancion' },
+      dias_suspension:       { label: 'Días de suspensión', expr: 's.dias_suspension' },
+      bibliotecario_sancion: { label: 'Registrado por', expr: 'admin.nombre_apellido' },
+      descripcion_sancion:   { label: 'Descripción de la sanción', expr: 's.descripcion_sancion' },
     },
     filters: {
       id_usuario:      { expr: 's.id_usuario', op: '=' },
-      tipo_infraccion: { expr: 's.tipo_infraccion', op: '=' },
-      estado_sancion:  { expr: 's.estado_sancion', op: '=' },
+      tipo_infraccion: { expr: 's.tipo_infraccion', op: 'IN_ANY' },
+      estado_sancion:  { expr: 's.estado_sancion', op: 'IN_ANY' },
+      id_admin:        { expr: 's.id_admin', op: '=' },
       fecha_desde:     { expr: 's.fecha_sancion', op: '>=' },
-      fecha_hasta:     { expr: 's.fecha_sancion', op: '<=' }
+      fecha_hasta:     { expr: 's.fecha_sancion', op: '<_dia_completo' }
     },
     defaultOrder: 's.fecha_sancion DESC'
   },
@@ -203,12 +263,14 @@ const REPORT_ENTITIES = {
       id_usuario: { label: 'N° Usuario', expr: 'u.id_usuario' },
       nombre:     { label: 'Nombre', expr: 'u.nombre_apellido' },
       correo:     { label: 'Correo', expr: 'u.correo' },
+      telefono:   { label: 'Teléfono', expr: 'u.telefono' },
+      ci:         { label: 'CI', expr: 'u.ci' },
       rol:        { label: 'Rol', expr: 't.nombre_tipo' },
       activo:     { label: 'Activo', expr: 'u.activo' },
       sancionado: { label: 'Sancionado', expr: 'u.sancionado' }
     },
     filters: {
-      rol:        { expr: 't.nombre_tipo', op: '=' },
+      rol:        { expr: 't.nombre_tipo', op: 'IN_ANY' },
       activo:     { expr: 'u.activo', op: '=' },
       sancionado: { expr: 'u.sancionado', op: '=' }
     },

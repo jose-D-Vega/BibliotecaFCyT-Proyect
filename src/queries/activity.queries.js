@@ -8,12 +8,32 @@ const registrarActividad = async ({ id_usuario, tipo_accion, entidad, id_entidad
   )
 }
 
+// Combinaciones que representan autogestión del usuario:
+// - solicitar/cancelar préstamos y renovaciones (entidad prestamos)
+// - editar el propio perfil o darse de alta por primer login (entidad usuarios,
+//   donde el actor y el objetivo de la acción son la misma persona: id_entidad = id_usuario)
+// Todo lo demás (aprobar, rechazar, activar, devolver, sancionar, cambio_rol, y las
+// acciones de un admin sobre OTRO usuario) es acción de funcionario. No se puede distinguir
+// por el rol actual del actor porque un bibliotecario también puede actuar como usuario
+// normal (pedir sus propios préstamos, editar su propio perfil), por eso se distingue
+// por el tipo de acción y, en el caso de "usuarios", por si el actor es el propio objetivo.
+const accionesUsuarioSQL = (prefix = '') => `(
+  (${prefix}entidad = 'prestamos' AND ${prefix}tipo_accion IN ('crear', 'cancelar'))
+  OR (${prefix}entidad = 'usuarios' AND ${prefix}tipo_accion IN ('crear', 'editar') AND ${prefix}id_entidad = ${prefix}id_usuario)
+)`
+
 // Builder único de filtros, reutilizado por getActividades y countActividades.
 // prefix permite usar "h." cuando la query tiene JOIN, o "" cuando no.
-const buildActividadesWhere = ({ id_usuario, tipo_accion, entidad, fecha_desde, fecha_hasta }, prefix = '') => {
+const buildActividadesWhere = ({ id_usuario, tipo_accion, entidad, fecha_desde, fecha_hasta, vista }, prefix = '') => {
   const values = []
   const conditions = []
   let paramIndex = 1
+
+  if (vista === 'usuarios') {
+    conditions.push(accionesUsuarioSQL(prefix))
+  } else if (vista === 'funcionarios') {
+    conditions.push(`NOT ${accionesUsuarioSQL(prefix)}`)
+  }
 
   if (id_usuario) {
     conditions.push(`${prefix}id_usuario = $${paramIndex}`)
