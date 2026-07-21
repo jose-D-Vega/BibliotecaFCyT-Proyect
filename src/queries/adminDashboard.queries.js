@@ -8,7 +8,7 @@ const getAdminDashboardStats = async () => {
     usuariosActivosResult,
     prestamosActivosResult,
     librosVencidosResult,
-    porVencerResult,
+    devueltosHoyResult,
     reservasPendientesResult,
     porAreaResult,
     tendenciaResult,
@@ -22,11 +22,13 @@ const getAdminDashboardStats = async () => {
 
     pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'vencido'`),
 
-    pool.query(
-  `SELECT COUNT(*) FROM prestamos
-   WHERE estado_prestamo = 'devuelto'
-     AND fecha_devolucion_real::date = CURRENT_DATE`
-),
+    pool.query(`
+      SELECT COUNT(*)
+      FROM prestamos p
+      INNER JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+      WHERE p.estado_prestamo = 'devuelto'
+        AND d.fecha_devolucion::date = CURRENT_DATE
+    `),
 
     pool.query(
       `SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'solicitud_reserva'`
@@ -85,7 +87,7 @@ const getAdminDashboardStats = async () => {
     usuariosActivos: parseInt(usuariosActivosResult.rows[0].count),
     prestamosActivos: parseInt(prestamosActivosResult.rows[0].count),
     librosVencidos: parseInt(librosVencidosResult.rows[0].count),
-    porVencer: parseInt(porVencerResult.rows[0].count),
+    librosDevueltosHoy: parseInt(devueltosHoyResult.rows[0].count),
     reservasPendientes: parseInt(reservasPendientesResult.rows[0].count),
     actividadPorArea,
     tendenciaMensual: tendenciaResult.rows,
