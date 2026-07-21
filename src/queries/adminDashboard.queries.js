@@ -1,8 +1,8 @@
 const pool = require('../config/db')
 
-const DIAS_POR_VENCER = 2
 
 const getAdminDashboardStats = async () => {
+
   const [
     totalLibrosResult,
     usuariosActivosResult,
@@ -10,89 +10,400 @@ const getAdminDashboardStats = async () => {
     librosVencidosResult,
     devueltosHoyResult,
     reservasPendientesResult,
-    porAreaResult,
+    actividadAreaResult,
     tendenciaResult,
     masPrestadosResult
+
   ] = await Promise.all([
-    pool.query(`SELECT COUNT(*) FROM libros WHERE activo = true`),
 
-    pool.query(`SELECT COUNT(*) FROM usuarios WHERE activo = true`),
 
-    pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'activo'`),
+    // TOTAL LIBROS
+    pool.query(`
+      SELECT COUNT(*)
+      FROM libros
+      WHERE activo = true
+    `),
 
-    pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'vencido'`),
+
+
+    // USUARIOS ACTIVOS
+    pool.query(`
+      SELECT COUNT(*)
+      FROM usuarios
+      WHERE activo = true
+    `),
+
+
+
+    // PRESTAMOS ACTIVOS
+    pool.query(`
+      SELECT COUNT(*)
+      FROM prestamos
+      WHERE estado_prestamo = 'activo'
+    `),
+
+
+
+    // VENCIDOS
+    pool.query(`
+      SELECT COUNT(*)
+      FROM prestamos
+      WHERE estado_prestamo = 'vencido'
+    `),
+
+
+
+    // DEVUELTOS HOY
+    pool.query(`
+      SELECT COUNT(*)
+      FROM devoluciones
+      WHERE fecha_devolucion::date = CURRENT_DATE
+    `),
+
+
+
+    // RESERVAS
+    pool.query(`
+      SELECT COUNT(*)
+      FROM prestamos
+      WHERE estado_prestamo = 'solicitud_reserva'
+    `),
+
+
+
+
+    // PRESTAMOS POR CARRERA
+    pool.query(`
+      SELECT 
+        TRIM(carrera_individual) AS carrera,
+        COUNT(*) AS cantidad
+
+      FROM detalles_prestamos dp
+
+      JOIN ejemplares e
+      ON dp.id_ejemplar = e.id_ejemplar
+
+      JOIN libros l
+      ON e.id_libro = l.id_libro
+
+
+      CROSS JOIN LATERAL
+      unnest(
+        string_to_array(l.carrera, ',')
+      )
+      AS carrera_individual
+
+
+      WHERE l.carrera IS NOT NULL
+
+      GROUP BY carrera_individual
+
+      ORDER BY cantidad DESC
+    `),
+
+
+
+
+    // TENDENCIA MENSUAL
+    pool.query(`
+      SELECT
+        EXTRACT(MONTH FROM fecha_solicitud)::int AS mes,
+        COUNT(*) AS cantidad
+
+      FROM prestamos
+
+      WHERE EXTRACT(YEAR FROM fecha_solicitud)
+      =
+      EXTRACT(YEAR FROM CURRENT_DATE)
+
+      GROUP BY mes
+
+      ORDER BY mes
+    `),
+
+
+
+
+    // LIBROS MAS PRESTADOS
+
+    pool.query(`
+      SELECT
+
+        l.id_libro,
+        l.titulo,
+        l.autor,
+        l.imagen_url,
+
+        COUNT(*) AS total_prestamos
+
+
+      FROM detalles_prestamos dp
+
+
+      JOIN ejemplares e
+      ON dp.id_ejemplar = e.id_ejemplar
+
+
+      JOIN libros l
+      ON e.id_libro = l.id_libro
+
+
+      GROUP BY
+        l.id_libro,
+        l.titulo,
+        l.autor,
+        l.imagen_url
+
+
+      ORDER BY total_prestamos DESC
+
+
+      LIMIT 6
+    `)
+
+  ])
+
+
+
+
+  const actividad = actividadAreaResult.rows
+
+
+  const total =
+    actividad.reduce(
+      (a,b)=>a + Number(b.cantidad),
+      0
+    )
+
+
+
+  const actividadPorArea =
+    actividad.map(item=>({
+
+      area:item.carrera,
+
+      porcentaje:
+        total > 0
+        ?
+        Math.round(
+          Number(item.cantidad)
+          /
+          total
+          *
+          100
+        )
+        :
+        0
+
+    }))
+
+
+
+
+
+  const libros =
+    masPrestadosResult.rows
+
+
+
+  const max =
+    Math.max(
+      ...libros.map(
+        x=>Number(x.total_prestamos)
+      ),
+      1
+    )
+
+
+
+  const librosMasPrestados =
+    libros.map(lib=>({
+
+      ...lib,
+
+      total_prestamos:
+        Number(lib.total_prestamos),
+
+
+      porcentaje_relativo:
+        Math.round(
+          Number(lib.total_prestamos)
+          /
+          max
+          *
+          100
+        )
+
+    }))
+
+
+
+
+
+  return {
+
+
+    totalLibros:
+      Number(totalLibrosResult.rows[0].count),
+
+
+    usuariosActivos:
+      Number(usuariosActivosResult.rows[0].count),
+
+
+    prestamosActivos:
+      Number(prestamosActivosResult.rows[0].count),
+
+
+    librosVencidos:
+      Number(librosVencidosResult.rows[0].count),
+
+
+    librosDevueltosHoy:
+      Number(devueltosHoyResult.rows[0].count),
+
+
+    reservasPendientes:
+      Number(reservasPendientesResult.rows[0].count),
+
+
+
+    actividadPorArea,
+
+
+    tendenciaMensual:
+      tendenciaResult.rows.map(x=>({
+        mes:Number(x.mes),
+        cantidad:Number(x.cantidad)
+      })),
+
+
+
+    librosMasPrestados
+
+  }
+
+}
+
+
+
+
+const getAdminExtraStats = async()=>{
+
+
+  const [
+    usuariosRol,
+    sesiones,
+    actividades
+
+  ] = await Promise.all([
+
+
+
+    pool.query(`
+      SELECT
+
+      tu.nombre_tipo AS rol,
+      COUNT(*) AS cantidad
+
+
+      FROM usuarios u
+
+
+      JOIN tipo_usuarios tu
+
+      ON u.id_tipo_usuario =
+      tu.id_tipo_usuario
+
+
+      WHERE u.activo=true
+
+
+      GROUP BY tu.nombre_tipo
+
+    `),
+
+
 
     pool.query(`
       SELECT COUNT(*)
-      FROM prestamos p
-      INNER JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
-      WHERE p.estado_prestamo = 'devuelto'
-        AND d.fecha_devolucion::date = CURRENT_DATE
+
+      FROM sesiones
+
+      WHERE estado='Activo'
     `),
 
-    pool.query(
-      `SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'solicitud_reserva'`
-    ),
 
-    // Distribución de préstamos por carrera — separa carreras combinadas
-    // en un mismo campo (ej. "Electrónica, Electricidad" -> 2 filas distintas)
-    // SIN LÍMITE, para que ninguna carrera con préstamos quede afuera
-    pool.query(
-      `SELECT TRIM(carrera_individual) AS carrera, COUNT(*) AS cantidad
-       FROM detalles_prestamos dp
-       JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-       JOIN libros l ON e.id_libro = l.id_libro
-       CROSS JOIN LATERAL unnest(string_to_array(l.carrera, ',')) AS carrera_individual
-       WHERE l.carrera IS NOT NULL AND l.carrera != ''
-       GROUP BY TRIM(carrera_individual)
-       ORDER BY cantidad DESC`
-    ),
 
-    pool.query(
-      `SELECT EXTRACT(MONTH FROM fecha_solicitud)::int AS mes, COUNT(*) AS cantidad
-       FROM prestamos
-       WHERE EXTRACT(YEAR FROM fecha_solicitud) = EXTRACT(YEAR FROM CURRENT_DATE)
-       GROUP BY mes
-       ORDER BY mes`
-    ),
 
-    pool.query(
-      `SELECT l.id_libro, l.titulo, l.autor, l.imagen_url, COUNT(*) AS total_prestamos
-       FROM detalles_prestamos dp
-       JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-       JOIN libros l ON e.id_libro = l.id_libro
-       GROUP BY l.id_libro, l.titulo, l.autor, l.imagen_url
-       ORDER BY total_prestamos DESC
-       LIMIT 5`
-    )
+    pool.query(`
+      SELECT
+
+      ha.id_actividad,
+      ha.tipo_accion,
+      ha.entidad,
+      ha.descripcion,
+      ha.fecha,
+      u.nombre_apellido
+
+
+      FROM historial_actividades ha
+
+
+      JOIN usuarios u
+
+      ON ha.id_usuario =
+      u.id_usuario
+
+
+      ORDER BY ha.fecha DESC
+
+
+      LIMIT 10
+    `)
+
+
   ])
 
-  const porArea = porAreaResult.rows
-  const totalPorArea = porArea.reduce((acc, r) => acc + parseInt(r.cantidad), 0)
-  const actividadPorArea = porArea.map(r => ({
-    area: r.carrera,
-    porcentaje: totalPorArea > 0 ? Math.round((parseInt(r.cantidad) / totalPorArea) * 100) : 0
-  }))
 
-  const masPrestados = masPrestadosResult.rows
-  const maxPrestamos = Math.max(...masPrestados.map(l => parseInt(l.total_prestamos)), 1)
-  const librosMasPrestados = masPrestados.map(l => ({
-    ...l,
-    total_prestamos: parseInt(l.total_prestamos),
-    porcentaje_relativo: Math.round((parseInt(l.total_prestamos) / maxPrestamos) * 100)
-  }))
+
 
   return {
-    totalLibros: parseInt(totalLibrosResult.rows[0].count),
-    usuariosActivos: parseInt(usuariosActivosResult.rows[0].count),
-    prestamosActivos: parseInt(prestamosActivosResult.rows[0].count),
-    librosVencidos: parseInt(librosVencidosResult.rows[0].count),
-    librosDevueltosHoy: parseInt(devueltosHoyResult.rows[0].count),
-    reservasPendientes: parseInt(reservasPendientesResult.rows[0].count),
-    actividadPorArea,
-    tendenciaMensual: tendenciaResult.rows,
-    librosMasPrestados
+
+
+    usuariosPorRol:
+
+      usuariosRol.rows.map(x=>({
+
+        rol:x.rol,
+
+        cantidad:Number(x.cantidad)
+
+      })),
+
+
+
+    sesionesActivas:
+
+      Number(
+        sesiones.rows[0].count
+      ),
+
+
+
+    actividadesRecientes:
+
+      actividades.rows
+
+
   }
+
+
 }
 
-module.exports = { getAdminDashboardStats }
+
+
+module.exports={
+ getAdminDashboardStats,
+ getAdminExtraStats
+}
