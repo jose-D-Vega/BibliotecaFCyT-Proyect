@@ -160,7 +160,9 @@ const buscarReservaAfectada = async (client, id_ejemplar) => {
      WHERE dp.id_ejemplar = $1
        AND dp.es_reserva = true
        AND dp.estado_prestamo_ejemplar = 'aprobado'
-       AND p.estado_prestamo IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')`,
+       AND p.estado_prestamo IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')
+     ORDER BY p.fecha_solicitud ASC
+     LIMIT 1`,
     [id_ejemplar]
   )
 
@@ -248,16 +250,16 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
       // Insertar en devoluciones — siempre con el id del préstamo activo
       await client.query(
         `INSERT INTO devoluciones
-           (id_prestamo, id_ejemplar, id_bibliotecario, estado_devuelto, observaciones)
-         VALUES ($1, $2, $3, $4, $5)`,
+          (id_prestamo, id_ejemplar, id_bibliotecario, estado_devuelto, observaciones)
+        VALUES ($1, $2, $3, $4, $5)`,
         [id_prestamo, dev.id_ejemplar, id_bibliotecario, dev.estado_devuelto, dev.observaciones || null]
       )
 
       // Actualizar el detalle bajo el id correcto (original para renovaciones)
       await client.query(
         `UPDATE detalles_prestamos
-         SET estado_prestamo_ejemplar = 'devuelto'
-         WHERE id_prestamo = $1 AND id_ejemplar = $2`,
+        SET estado_prestamo_ejemplar = 'devuelto'
+        WHERE id_prestamo = $1 AND id_ejemplar = $2`,
         [id_detalles, dev.id_ejemplar]
       )
 
@@ -271,15 +273,20 @@ const registerReturn = async (id_prestamo, id_bibliotecario, devoluciones) => {
         if (dev.estado_devuelto === 'bueno') {
           // Queda reservado para quien lo reservó, no disponible para cualquiera
           nuevoEstadoEjemplar = 'reservado'
-          await verificarReservaLista(client, reservaAfectada.id_prestamo)
         }
         // Si volvió dañado/perdido: se resuelve al confirmar reasignación (reassignReservation)
       }
 
+      // Actualizar el ejemplar PRIMERO, para que verificarReservaLista vea el estado real y actualizado
       await client.query(
         `UPDATE ejemplares SET estado_ejemplar = $1 WHERE id_ejemplar = $2`,
         [nuevoEstadoEjemplar, dev.id_ejemplar]
       )
+
+      // Ahora sí: si quedó reservado, recién acá chequear si la reserva ya está completa
+      if (reservaAfectada && dev.estado_devuelto === 'bueno') {
+        await verificarReservaLista(client, reservaAfectada.id_prestamo)
+      }
     }
 
     // Verificar si quedan ejemplares activos (buscar bajo el id correcto)
@@ -1043,6 +1050,73 @@ const reemplazarEjemplarPerdido = async (id_prestamo, id_ejemplar, id_biblioteca
   }
 }
 
+// Rechaza definitivamente UN ítem de una reserva ya aprobada (Ronda 1) que
+// no se puede resolver: volvió dañado/perdido y no hay sustituto disponible.
+// A diferencia de respondLoanDetail (que solo decide sobre ítems 'solicitado'),
+// esta actúa sobre un ítem que YA estaba 'aprobado' y lo pasa a 'rechazado' —
+// sin tocar el resto de los ítems de la misma reserva (que pueden seguir
+// esperando devolución, o ya estar 'reservado' por otro sustituto).
+const rejectReservaItemSinSustituto = async (id_prestamo, id_ejemplar, id_bibliotecario, motivo) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows: detalle } = await client.query(
+      `UPDATE detalles_prestamos
+       SET estado_prestamo_ejemplar = 'rechazado', observaciones = $1
+       WHERE id_prestamo = $2 AND id_ejemplar = $3
+         AND es_reserva = true AND estado_prestamo_ejemplar = 'aprobado'
+       RETURNING *`,
+      [motivo || 'Ejemplar perdido/dañado sin sustituto disponible', id_prestamo, id_ejemplar]
+    )
+
+    if (detalle.length === 0) {
+      await client.query('ROLLBACK')
+      return { error: 'El ítem no está en un estado válido para rechazar (¿ya fue resuelto?)' }
+    }
+
+    const { rows: detalles } = await client.query(
+      `SELECT estado_prestamo_ejemplar FROM detalles_prestamos WHERE id_prestamo = $1`,
+      [id_prestamo]
+    )
+    const todosRechazados = detalles.every(d => d.estado_prestamo_ejemplar === 'rechazado')
+    const nuevoEstado = todosRechazados ? 'reserva_rechazada' : 'reserva_parcialmente_aprobada'
+
+    const { rows: prestamoData } = await client.query(
+      `SELECT id_usuario FROM prestamos WHERE id_prestamo = $1`, [id_prestamo]
+    )
+
+    await client.query(
+      `UPDATE prestamos SET estado_prestamo = $1, id_bibliotecario = $2 WHERE id_prestamo = $3`,
+      [nuevoEstado, id_bibliotecario, id_prestamo]
+    )
+
+    // Con este ítem fuera del camino, puede que el resto de la reserva
+    // (ya 'reservado' por devoluciones o sustitutos previos) esté ahora
+    // completa y lista para gestionar.
+    if (!todosRechazados) {
+      await verificarReservaLista(client, id_prestamo)
+    }
+
+    await client.query('COMMIT')
+
+    await crearNotificacion({
+      id_usuario: prestamoData[0].id_usuario,
+      tipo: 'reserva_modificada',
+      titulo: 'Un ejemplar de tu reserva ya no está disponible',
+      mensaje: `El ejemplar #${id_ejemplar} que esperabas fue reportado como dañado/perdido y no había otra copia disponible para reemplazarlo. Fue retirado de tu reserva${todosRechazados ? '.' : '; el resto sigue en curso.'}`,
+      id_prestamo
+    })
+
+    return { rechazado: true, prestamo_estado: nuevoEstado }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 module.exports = {
   searchActiveLoans,
   getAllActiveLoans,
@@ -1057,5 +1131,7 @@ module.exports = {
   countDevolucionesUsuario,
   reassignReservation,
   recuperarEjemplarPerdido, 
-  reemplazarEjemplarPerdido
+  reemplazarEjemplarPerdido,
+  verificarReservaLista,
+  rejectReservaItemSinSustituto
 }

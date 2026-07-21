@@ -4,7 +4,7 @@ const pool = require('../config/db')
 const getAllBooks = async ({ search, orden, tipo_material, carrera, limit, offset }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = 'WHERE 1=1'
+  let whereClause = 'WHERE l.activo=TRUE'
 
   if (search) {
     whereClause += ` AND (l.titulo ILIKE $${paramIndex} OR l.autor ILIKE $${paramIndex})`

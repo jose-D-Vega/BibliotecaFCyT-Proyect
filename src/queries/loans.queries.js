@@ -11,6 +11,81 @@ const {
   DIAS_PLACEHOLDER_SOLICITUD
 } = require('../config/loans.config')
 
+const { verificarReservaLista } = require('./returns.queries')
+
+// Libera (o reasigna a la siguiente reserva en cola) una lista puntual de
+// ejemplares que estaban 'reservado' para id_prestamo_origen y ya no lo estarán más
+// (porque se canceló la reserva completa, o porque se rechazó ese ítem puntual).
+const _liberarOReasignarEjemplares = async (client, id_prestamo_origen, ejemplaresIds) => {
+  for (const id_ejemplar of ejemplaresIds) {
+    const { rows: ejRows } = await client.query(
+      `SELECT id_libro FROM ejemplares
+       WHERE id_ejemplar = $1 AND estado_ejemplar = 'reservado'`,
+      [id_ejemplar]
+    )
+    if (ejRows.length === 0) continue // ya no estaba 'reservado', nada que hacer
+
+    const id_libro = ejRows[0].id_libro
+
+    const { rows: siguientes } = await client.query(
+      `SELECT dp.id_prestamo, dp.id_ejemplar AS id_ejemplar_placeholder, p.id_usuario
+       FROM detalles_prestamos dp
+       JOIN prestamos p ON dp.id_prestamo = p.id_prestamo
+       JOIN ejemplares e2 ON dp.id_ejemplar = e2.id_ejemplar
+       WHERE e2.id_libro = $1
+         AND dp.es_reserva = true
+         AND dp.estado_prestamo_ejemplar = 'aprobado'
+         AND p.estado_prestamo IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')
+         AND p.id_prestamo != $2
+         AND e2.estado_ejemplar = 'prestado'
+       ORDER BY p.fecha_solicitud ASC
+       LIMIT 1`,
+      [id_libro, id_prestamo_origen]
+    )
+
+    if (siguientes.length === 0) {
+      await client.query(
+        `UPDATE ejemplares SET estado_ejemplar = 'disponible' WHERE id_ejemplar = $1`,
+        [id_ejemplar]
+      )
+      continue
+    }
+
+    const siguiente = siguientes[0]
+
+    await client.query(
+      `UPDATE detalles_prestamos
+       SET id_ejemplar = $1
+       WHERE id_prestamo = $2 AND id_ejemplar = $3`,
+      [id_ejemplar, siguiente.id_prestamo, siguiente.id_ejemplar_placeholder]
+    )
+
+    await crearNotificacion({
+      id_usuario: siguiente.id_usuario,
+      tipo: 'reserva_modificada',
+      titulo: 'Tu reserva avanzó de lugar',
+      mensaje: 'Se liberó antes de tiempo el material que esperabas: ya está apartado para vos.',
+      id_prestamo: siguiente.id_prestamo
+    })
+
+    await verificarReservaLista(client, siguiente.id_prestamo)
+  }
+}
+
+// Wrapper para cancelLoan/cancelLoanSmart: junta todos los reservado del préstamo
+const _liberarOReasignarReservados = async (client, id_prestamo_cancelado) => {
+  const { rows: ejemplaresReservados } = await client.query(
+    `SELECT dp.id_ejemplar
+     FROM detalles_prestamos dp
+     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
+     WHERE dp.id_prestamo = $1
+       AND dp.estado_prestamo_ejemplar != 'rechazado'
+       AND e.estado_ejemplar = 'reservado'`,
+    [id_prestamo_cancelado]
+  )
+  await _liberarOReasignarEjemplares(client, id_prestamo_cancelado, ejemplaresReservados.map(e => e.id_ejemplar))
+}
+
 
 const _insertLoan = async (client, id_usuario, ejemplares, esReserva, idPrestamoOriginal = null, numeroRenovacion = 0, fechaLimiteRespuesta = null) => {
   const esRenovacion = idPrestamoOriginal !== null
@@ -76,10 +151,19 @@ const createLoan = async (id_usuario, itemsCarrito) => {
         const faltantes = cantidad - cantidadDisponible
 
         const { rows: reservables } = await client.query(
-          `SELECT id_ejemplar FROM ejemplares
-           WHERE id_libro = $1 AND estado_ejemplar IN ('prestado', 'reservado')
-           ORDER BY id_ejemplar ASC
-           LIMIT $2`,
+          `SELECT e.id_ejemplar FROM ejemplares e
+          WHERE e.id_libro = $1
+            AND e.estado_ejemplar = 'prestado'
+            AND NOT EXISTS (
+              SELECT 1 FROM detalles_prestamos dp
+              JOIN prestamos p ON dp.id_prestamo = p.id_prestamo
+              WHERE dp.id_ejemplar = e.id_ejemplar
+                AND dp.es_reserva = true
+                AND dp.estado_prestamo_ejemplar IN ('solicitado', 'aprobado')
+                AND p.estado_prestamo IN ('solicitud_reserva', 'reserva_aprobada', 'reserva_parcialmente_aprobada')
+            )
+          ORDER BY e.id_ejemplar ASC
+          LIMIT $2`,
           [id_libro, faltantes]
         )
 
@@ -345,12 +429,16 @@ const respondLoanDetailsBatch = async (id_prestamo, respuestas, id_bibliotecario
          SET estado_prestamo_ejemplar = $1,
              observaciones = $4
          WHERE id_prestamo = $2 AND id_ejemplar = $3
-         RETURNING id_ejemplar`,
+         AND estado_prestamo_ejemplar != 'rechazado'
+         RETURNING id_ejemplar, es_reserva`,
         [r.estado, id_prestamo, r.id_ejemplar, r.observaciones || '']
       )
       if (rows.length === 0) {
-        await client.query('ROLLBACK')
-        return null
+        continue
+      }
+
+      if (r.estado === 'rechazado' && rows[0].es_reserva) {
+        await _liberarOReasignarEjemplares(client, id_prestamo, [r.id_ejemplar])
       }
     }
 
@@ -545,15 +633,9 @@ const cancelLoan = async (id_prestamo, id_usuario) => {
     }
 
     // Si era reserva, liberar los ejemplares reservados
+    // Si era reserva, liberar (o reasignar a quien siga en cola) los ejemplares reservados
     if (prestamo[0].es_reserva) {
-      await client.query(
-        `UPDATE ejemplares SET estado_ejemplar = 'disponible'
-         WHERE id_ejemplar IN (
-           SELECT id_ejemplar FROM detalles_prestamos
-           WHERE id_prestamo = $1 AND estado_prestamo_ejemplar != 'rechazado'
-         )`,
-        [id_prestamo]
-      )
+      await _liberarOReasignarReservados(client, id_prestamo)
     }
 
     const { rows: cancelado } = await client.query(
@@ -589,8 +671,7 @@ const cancelLoanSmart = async (id_prestamo, id_usuario) => {
     await client.query('BEGIN')
 
     const { rows: prestamo } = await client.query(
-      `SELECT * FROM prestamos 
-      WHERE id_prestamo = $1`,
+      `SELECT * FROM prestamos WHERE id_prestamo = $1`,
       [id_prestamo]
     )
 
@@ -600,17 +681,42 @@ const cancelLoanSmart = async (id_prestamo, id_usuario) => {
     }
 
     const actual = prestamo[0].estado_prestamo
-
-    const estadosPréstamo = ['aprobado', 'parcialmente_aprobado']
-    const estadosReserva = ['reserva_aprobada', 'reserva_parcialmente_aprobada']
+    const esReserva = prestamo[0].es_reserva
 
     let nuevoEstado = null
+    let esUndoRondaDos = false
 
-    if (estadosPréstamo.includes(actual)) {
-      nuevoEstado = 'solicitado'
-    }
+    if (['aprobado', 'parcialmente_aprobado'].includes(actual)) {
+      if (esReserva) {
+        esUndoRondaDos = true
 
-    if (estadosReserva.includes(actual)) {
+        // Solo se revierte lo que SIGUE siendo nuestro: ítems 'aprobado' cuyo
+        // ejemplar sigue 'reservado' esperando a este usuario. Los 'rechazado'
+        // NO se tocan — si alguno ya fue reasignado a otra reserva en cola, eso
+        // ya es un hecho consumado e independiente; el admin solo puede volver
+        // a decidir sobre lo que todavía pertenece a esta reserva.
+        await client.query(
+          `UPDATE detalles_prestamos
+          SET estado_prestamo_ejemplar = 'solicitado', observaciones = ''
+          WHERE id_prestamo = $1 AND es_reserva = true AND estado_prestamo_ejemplar = 'aprobado'`,
+          [id_prestamo]
+        )
+
+        const { rows: hayRechazados } = await client.query(
+          `SELECT COUNT(*) FROM detalles_prestamos
+          WHERE id_prestamo = $1 AND es_reserva = true AND estado_prestamo_ejemplar = 'rechazado'`,
+          [id_prestamo]
+        )
+
+        // Si ya hay rechazos definitivos, queda "parcial" (mezcla de firme +
+        // pendiente); si no hay ninguno, es como si nunca se hubiera decidido nada
+        nuevoEstado = parseInt(hayRechazados[0].count) > 0
+          ? 'reserva_parcialmente_aprobada'
+          : 'reserva_aprobada'
+      } else {
+        nuevoEstado = 'solicitado'
+      }
+    } else if (['reserva_aprobada', 'reserva_parcialmente_aprobada'].includes(actual)) {
       nuevoEstado = 'solicitud_reserva'
     }
 
@@ -619,27 +725,45 @@ const cancelLoanSmart = async (id_prestamo, id_usuario) => {
       return { error: `No se puede cancelar desde estado: ${actual}` }
     }
 
-    // liberar ejemplares si era reserva
-    if (prestamo[0].es_reserva) {
+    if (esReserva && !esUndoRondaDos) {
+      await _liberarOReasignarReservados(client, id_prestamo)
+    }
+
+    if (!esUndoRondaDos) {
       await client.query(
-        `UPDATE ejemplares SET estado_ejemplar = 'disponible'
-         WHERE id_ejemplar IN (
-           SELECT id_ejemplar FROM detalles_prestamos
-           WHERE id_prestamo = $1 AND estado_prestamo_ejemplar != 'rechazado'
-         )`,
+        `UPDATE detalles_prestamos
+         SET estado_prestamo_ejemplar = 'solicitado',
+             observaciones = ''
+         WHERE id_prestamo = $1
+           AND estado_prestamo_ejemplar IN ('aprobado', 'rechazado')`,
         [id_prestamo]
       )
     }
 
     const { rows: updated } = await client.query(
       `UPDATE prestamos 
-       SET estado_prestamo = $1
+       SET estado_prestamo = $1,
+           fecha_respuesta = NULL,
+           id_bibliotecario = NULL
        WHERE id_prestamo = $2
        RETURNING *`,
       [nuevoEstado, id_prestamo]
     )
 
     await client.query('COMMIT')
+
+    // Avisar al usuario que la aprobación fue revertida — se había prometido
+    // el préstamo/entrega y ahora vuelve a estar pendiente
+    await crearNotificacion({
+      id_usuario: updated[0].id_usuario,
+      tipo: esUndoRondaDos ? 'reserva_disponible' : (esReserva ? 'reserva_aprobada' : 'prestamo_aprobado'),
+      titulo: 'Se revirtió una aprobación',
+      mensaje: esUndoRondaDos
+        ? 'La confirmación de entrega de tu reserva fue revertida. Seguimos gestionando tu solicitud.'
+        : 'La aprobación de tu solicitud fue revertida. La estamos revisando de nuevo.',
+      id_prestamo
+    })
+
     return updated[0]
 
   } catch (err) {
@@ -687,22 +811,22 @@ const getLoanMaterials = async (id_prestamo) => {
 // Listar préstamos con filtros
 
 
-const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, fecha_hasta, limit, offset }) => {
+const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, fecha_hasta, solo_reservas_listas, excluir_pendientes_solicitud, limit, offset }) => {
   const values = []
   let paramIndex = 1
   let whereClause = 'WHERE 1=1'
 
-  // Excluir préstamos en estado 'renovado' — son reemplazados visualmente
-  // por el registro de la renovación que los sucedió
   whereClause += ` AND p.estado_prestamo NOT IN ('renovado', 'renovacion_finalizada')`
+
+   if (excluir_pendientes_solicitud) {
+    whereClause += ` AND p.estado_prestamo NOT IN ('solicitado', 'solicitud_reserva', 'solicitud_renovacion')`
+  }
 
   if (id_usuario) {
     whereClause += ` AND p.id_usuario = $${paramIndex}`
     values.push(id_usuario)
     paramIndex++
   }
-  // `estados` (array) tiene prioridad sobre `estado` (single) cuando ambos vienen definidos,
-  // ya que es el filtro más específico. Se usa `= ANY(...)` para aceptar varios valores a la vez.
   if (estados && estados.length > 0) {
     whereClause += ` AND p.estado_prestamo = ANY($${paramIndex}::text[])`
     values.push(estados)
@@ -728,6 +852,27 @@ const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, 
     paramIndex++
   }
 
+  // NUEVO — Solo tiene efecto sobre préstamos en reserva_aprobada/parcial:
+  // los deja pasar únicamente si TODOS sus ejemplares de reserva aprobados
+  // ya están físicamente devueltos (estado_ejemplar = 'reservado'). Se usa
+  // exclusivamente desde el tab "Solicitudes" — el tab "Préstamos" sigue
+  // pudiendo listar reservas aprobadas aunque todavía estén esperando
+  // devolución, para que el admin pueda hacer seguimiento.
+  if (solo_reservas_listas) {
+    whereClause += `
+      AND (
+        p.estado_prestamo NOT IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')
+        OR NOT EXISTS (
+          SELECT 1 FROM detalles_prestamos dpr
+          JOIN ejemplares er ON dpr.id_ejemplar = er.id_ejemplar
+          WHERE dpr.id_prestamo = p.id_prestamo
+            AND dpr.es_reserva = true
+            AND dpr.estado_prestamo_ejemplar = 'aprobado'
+            AND er.estado_ejemplar != 'reservado'
+        )
+      )`
+  }
+
   values.push(limit)
   values.push(offset)
 
@@ -743,25 +888,16 @@ const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, 
        p.id_bibliotecario_activacion,
        p.fecha_cancelacion,
        p.fecha_limite_respuesta_renovacion,
-
-       -- Fechas del préstamo original cuando existe (solicitud, aprobación y activación
-       -- siempre corresponden al préstamo raíz; la renovación agrega su propia fecha)
        COALESCE(orig.fecha_solicitud, p.fecha_solicitud)   AS fecha_solicitud,
        COALESCE(orig.fecha_respuesta, p.fecha_respuesta)   AS fecha_respuesta,
        COALESCE(orig.fecha_activacion, p.fecha_activacion) AS fecha_activacion,
-
-       -- Fecha tope siempre del registro actual (es la vigente)
        p.fecha_tope_devolucion,
-
-       -- Fecha en que SE APROBÓ esta renovación (null si no es renovación o aún no aprobada)
        CASE WHEN p.id_prestamo_original IS NOT NULL
          THEN p.fecha_activacion
          ELSE NULL
        END AS fecha_renovacion,
-
        u.nombre_apellido,
        u.correo,
-
        COALESCE(
          JSON_AGG(
            JSON_BUILD_OBJECT(
@@ -778,19 +914,13 @@ const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, 
          '[]'
        ) AS detalles,
        COUNT(dp.id_ejemplar) AS total_ejemplares
-
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
-
-     -- Para renovaciones: obtener las fechas del préstamo raíz
      LEFT JOIN prestamos orig ON p.id_prestamo_original = orig.id_prestamo
-
-     -- Para detalles: las renovaciones no tienen propios, heredan del original
      LEFT JOIN detalles_prestamos dp
        ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
      LEFT JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
-
      ${whereClause}
      GROUP BY
        p.id_prestamo, p.id_prestamo_original, p.numero_renovacion,
@@ -808,18 +938,20 @@ const getLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, 
   return rows
 }
 
-const countLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, fecha_hasta }) => {
+const countLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde, fecha_hasta, solo_reservas_listas, excluir_pendientes_solicitud }) => {
   const values = []
   let paramIndex = 1
   let whereClause = `WHERE estado_prestamo NOT IN ('renovado', 'renovacion_finalizada')`
+
+  if (excluir_pendientes_solicitud) {
+    whereClause += ` AND estado_prestamo NOT IN ('solicitado', 'solicitud_reserva', 'solicitud_renovacion')`
+  }
 
   if (id_usuario) {
     whereClause += ` AND id_usuario = $${paramIndex}`
     values.push(id_usuario)
     paramIndex++
   }
-  // Debe coincidir exactamente con el mismo criterio de estado(s) que getLoans(),
-  // o el total/totalPages que ve el frontend quedaría desincronizado con los resultados reales.
   if (estados && estados.length > 0) {
     whereClause += ` AND estado_prestamo = ANY($${paramIndex}::text[])`
     values.push(estados)
@@ -843,6 +975,23 @@ const countLoans = async ({ id_usuario, estado, estados, es_reserva, fecha_desde
     whereClause += ` AND fecha_solicitud <= $${paramIndex}::date + INTERVAL '1 day'`
     values.push(fecha_hasta)
     paramIndex++
+  }
+
+  // Mismo criterio que getLoans — debe coincidir exactamente o el total
+  // de páginas queda desincronizado con los resultados reales.
+  if (solo_reservas_listas) {
+    whereClause += `
+      AND (
+        estado_prestamo NOT IN ('reserva_aprobada', 'reserva_parcialmente_aprobada')
+        OR NOT EXISTS (
+          SELECT 1 FROM detalles_prestamos dpr
+          JOIN ejemplares er ON dpr.id_ejemplar = er.id_ejemplar
+          WHERE dpr.id_prestamo = prestamos.id_prestamo
+            AND dpr.es_reserva = true
+            AND dpr.estado_prestamo_ejemplar = 'aprobado'
+            AND er.estado_ejemplar != 'reservado'
+        )
+      )`
   }
 
   const { rows } = await pool.query(
