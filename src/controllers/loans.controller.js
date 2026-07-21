@@ -225,7 +225,8 @@ const cancelLoanSmartHandler = async (req, res) => {
 
 const getLoansHandler = async (req, res) => {
   try {
-    const { estado, estados, es_reserva, fecha_desde, fecha_hasta, page = 1, limit = 20 } = req.query
+    const { estado, estados, es_reserva, fecha_desde, fecha_hasta, 
+      solo_reservas_listas, excluir_pendientes_solicitud, page = 1, limit = 20 } = req.query
     const parsedLimit = parseInt(limit)
     const parsedPage = parseInt(page)
     const offset = (parsedPage - 1) * parsedLimit
@@ -254,6 +255,8 @@ const getLoansHandler = async (req, res) => {
       es_reserva: esReservaFilter,
       fecha_desde,
       fecha_hasta,
+      solo_reservas_listas: solo_reservas_listas === 'true',
+      excluir_pendientes_solicitud: excluir_pendientes_solicitud === 'true', 
       limit: parsedLimit,
       offset
     }

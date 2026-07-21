@@ -1,7 +1,8 @@
 const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, getHistorial,
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
    getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario,
-  reassignReservation, recuperarEjemplarPerdido, reemplazarEjemplarPerdido, } = require('../queries/returns.queries')
+  reassignReservation, recuperarEjemplarPerdido, reemplazarEjemplarPerdido,
+  rejectReservaItemSinSustituto } = require('../queries/returns.queries')
 const { registrarActividad } = require('../queries/activity.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
@@ -86,18 +87,32 @@ const registerReturnHandler = async (req, res) => {
 
 // Confirmar (o rechazar) la reasignación de un ejemplar sustituto a una reserva
 // cuyo ejemplar original volvió dañado/perdido
+// Confirmar (reasignar sustituto) o descartar definitivamente (rechazar ese
+// ítem de la reserva) un ejemplar afectado que volvió dañado/perdido
 const resolveReservaAfectadaHandler = async (req, res) => {
   try {
     const { id_prestamo, id_ejemplar_anterior } = req.params
-    const { id_ejemplar_nuevo, accion } = req.body // accion: 'reasignar' | 'descartar'
+    const { id_ejemplar_nuevo, accion, motivo } = req.body // accion: 'reasignar' | 'descartar'
 
     if (!['reasignar', 'descartar'].includes(accion)) {
       return res.status(400).json({ error: 'Acción inválida' })
     }
 
     if (accion === 'descartar') {
-      // El bibliotecario decide no reasignar automáticamente; queda pendiente de gestión manual
-      return res.json({ message: 'Reasignación descartada. Gestioná la reserva manualmente.' })
+      const resultado = await rejectReservaItemSinSustituto(
+        id_prestamo, id_ejemplar_anterior, req.user.id_usuario, motivo
+      )
+      if (resultado.error) return res.status(409).json({ error: resultado.error })
+
+      registrarActividad({
+        id_usuario: req.user.id_usuario,
+        tipo_accion: 'editar',
+        entidad: 'prestamos',
+        id_entidad: parseInt(id_prestamo),
+        descripcion: `Descartó el ejemplar #${id_ejemplar_anterior} de la reserva del préstamo #${id_prestamo} (sin sustituto disponible)`
+      }).catch(err => console.error('Error al registrar actividad:', err))
+
+      return res.json({ message: 'Ítem descartado de la reserva y usuario notificado', data: resultado })
     }
 
     if (!id_ejemplar_nuevo) {
@@ -117,7 +132,7 @@ const resolveReservaAfectadaHandler = async (req, res) => {
 
     res.json({ message: 'Reserva reasignada al ejemplar sustituto', data: resultado })
   } catch (error) {
-    console.error('Error al reasignar reserva:', error)
+    console.error('Error al resolver reserva afectada:', error)
     res.status(500).json({ error: 'Error interno del servidor' })
   }
 }
