@@ -2,15 +2,15 @@ const pool = require('../config/db')
 
 const isAdmin = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' })
-  const userRol = req.user.rol ? req.user.rol.toLowerCase() : ''
-  if (userRol === 'admin') return next()
+  const rolEfectivo = (req.user.rolActivo || req.user.rol || '').toLowerCase()
+  if (rolEfectivo === 'admin') return next()
   return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de admin' })
 }
 
 const isBibliotecario = (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' })
-  const userRol = req.user.rol ? req.user.rol.toLowerCase() : ''
-  if (!['bibliotecario', 'admin'].includes(userRol)) {
+  const rolEfectivo = (req.user.rolActivo || req.user.rol || '').toLowerCase()
+  if (!['bibliotecario', 'admin'].includes(rolEfectivo)) {
     return res.status(403).json({ error: 'Acceso denegado.' })
   }
   next()
@@ -21,7 +21,6 @@ const isNormal = (req, res, next) => {
   next()
 }
 
-// Verifica en la BD que el usuario autenticado no tenga sanciones activas.
 const checkNotSancionado = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
