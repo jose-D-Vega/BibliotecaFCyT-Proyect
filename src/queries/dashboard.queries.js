@@ -56,7 +56,7 @@ const getDashboardStats = async (id_usuario) => {
        JOIN libros l ON e.id_libro = l.id_libro
        WHERE p.id_usuario = $1
        ORDER BY d.fecha_devolucion DESC
-       LIMIT 5`,
+       LIMIT 6`,
       [id_usuario]
     )
   ])

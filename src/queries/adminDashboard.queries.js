@@ -158,7 +158,7 @@ const getAdminDashboardStats = async () => {
       ORDER BY total_prestamos DESC
 
 
-      LIMIT 5
+      LIMIT 6
     `)
 
   ])

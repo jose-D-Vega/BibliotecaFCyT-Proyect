@@ -67,7 +67,7 @@ const getAdminDashboardStats = async () => {
        JOIN libros l ON e.id_libro = l.id_libro
        GROUP BY l.id_libro, l.titulo, l.autor, l.imagen_url
        ORDER BY total_prestamos DESC
-       LIMIT 5`
+       LIMIT 6`
     )
   ])
 
