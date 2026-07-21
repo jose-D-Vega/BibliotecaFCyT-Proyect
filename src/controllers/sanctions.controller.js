@@ -227,7 +227,9 @@ const resolveSanctionHandler = async (req, res) => {
     if (rol === 'bibliotecario') {
       const sancionActual = await getSanctionById(id)
       if (sancionActual && sancionActual.id_usuario === req.user.id_usuario) {
-        return res.status(403).json({ error: 'No podés resolver una sanción que está dirigida a vos mismo' })
+        return res.status(403).json({ 
+          code: 'USUARIO_SANCIONADO',
+          error: 'No podés resolver una sanción que está dirigida a vos mismo' })
       }
     }
 
@@ -301,7 +303,9 @@ const desescalateSanctionHandler = async (req, res) => {
     if (rol === 'bibliotecario') {
       const sancionActual = await getSanctionById(id)
       if (sancionActual && sancionActual.id_usuario === req.user.id_usuario) {
-        return res.status(403).json({ error: 'No podés des-escalar una sanción que está dirigida a vos mismo' })
+        return res.status(403).json({ 
+          code: 'USUARIO_SANCIONADO',
+          error: 'No podés des-escalar una sanción que está dirigida a vos mismo' })
       }
     }
 

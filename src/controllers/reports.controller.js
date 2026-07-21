@@ -2,13 +2,29 @@ const { construirReporte, getEntidadesDisponibles,
   buscarUsuariosParaFiltro, buscarLibrosParaFiltro } = require('../queries/reports.queries')
 
 const getConfigReportesHandler = (req, res) => {
-  res.json({ entidades: getEntidadesDisponibles() })
+  const rol = req.user.rol
+
+  res.json({
+    entidades: getEntidadesDisponibles(rol)
+  })
 }
 
 const generarReporteHandler = async (req, res) => {
   try {
     const { entidad, columnas, extensiones, orden_por, orden_dir, ...filtros } = req.query
     if (!entidad) return res.status(400).json({ error: 'Debe especificar una entidad' })
+      if (
+  req.user.rol === 'bibliotecario' &&
+  [
+    'usuarios',
+    'sesiones',
+    'actividades'
+  ].includes(entidad)
+) {
+  return res.status(403).json({
+    error: 'No tienes permisos para generar este reporte'
+  })
+}
 
     const columnasArray = columnas ? columnas.split(',') : []
     const extensionesArray = extensiones ? extensiones.split(',') : []

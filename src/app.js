@@ -44,6 +44,7 @@ app.use('/api/sanctions', sanctionsRoutes)
 app.use('/api/reports', reportsRoutes)
 
 app.use('/api/dashboard', require('./routes/dashboard.route'))
+app.use('/api/admin-dashboard', require('./routes/adminDashboard.route'))
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {

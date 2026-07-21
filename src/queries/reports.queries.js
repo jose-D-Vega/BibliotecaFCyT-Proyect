@@ -130,8 +130,26 @@ const construirReporte = async ({ entidad, columnas, filtros, extensiones, orden
   }
 }
 
-const getEntidadesDisponibles = () => {
-  return Object.entries(REPORT_ENTITIES).map(([key, config]) => ({
+const getEntidadesDisponibles = (rol) => {
+
+  let entidades = Object.entries(REPORT_ENTITIES)
+
+if (rol === 'bibliotecario') {
+  entidades = entidades.filter(([key]) =>
+    [
+      'usuarios',
+      'prestamos',
+      'devoluciones',
+      'libros',
+      'ejemplares',
+      'sanciones',
+      'detalles_prestamos'
+    ].includes(key)
+  )
+}
+
+
+  return entidades.map(([key, config]) => ({
     key,
     label: config.label,
     columnas: Object.entries(config.columns).map(([ck, cv]) => ({ key: ck, label: cv.label })),
