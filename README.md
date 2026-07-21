@@ -15,11 +15,14 @@ Sistema completo de gestión de biblioteca desarrollado con **Node.js/Express** 
 - ✅ **Gestión de Usuarios** - Crear y administrar perfiles de usuarios
 - ✅ **Registro de Actividades** - Auditoría de todas las operaciones
 - ✅ **Control de Sesiones** - Seguimiento de sesiones activas
+- ✅ **Dashboards por Rol** - Estadísticas para admin, bibliotecario y usuario
+- ✅ **Reportes** - Generación de reportes con búsqueda de usuarios/libros
 - ✅ **Autenticación Segura** - Login con JWT y Google OAuth 2.0
 - ✅ **Control de Acceso por Roles** - Autorización basada en roles (admin, bibliotecario, normal)
 - ✅ **Subida de Imágenes** - Upload de portadas con Multer + Supabase
 - ✅ **API REST** - Interfaz completa con CORS habilitado
 - ✅ **Manejo Global de Errores** - Middleware centralizado de errores
+- ✅ **Jobs Automáticos** - Verificación horaria de préstamos vencidos/renovaciones y limpieza de sesiones expiradas cada 5 min
 
 ---
 
@@ -47,10 +50,14 @@ BibliotecaFCyT-Proyect/
 │ │ ├── users.controller.js
 │ │ ├── activity.controller.js
 │ │ ├── notifications.controller.js
-│ │ └── session.controller.js
+│ │ ├── session.controller.js
+│ │ ├── dashboard.controller.js # Estadísticas para usuario normal
+│ │ ├── adminDashboard.controller.js # Estadísticas para admin
+│ │ ├── biblioDashboard.controller.js # Estadísticas para bibliotecario
+│ │ └── reports.controller.js # Generación de reportes
 │ ├── middlewares/ # Middleware personalizado
 │ │ ├── auth.js # Verificación de JWT (verifyToken)
-│ │ ├── roles.js # Control de roles (isAdmin, isBibliotecario, isNormal)
+│ │ ├── roles.js # Control de roles (isAdmin, isBibliotecario, isNormal, checkNotSancionado)
 │ │ ├── upload.js # Multer para subida de imágenes
 │ │ └── error.middleware.js # Manejo global de errores
 │ ├── routes/ # Definición de endpoints
@@ -64,7 +71,11 @@ BibliotecaFCyT-Proyect/
 │ │ ├── activity.routes.js
 │ │ ├── health.routes.js
 │ │ ├── notifications.routes.js
-│ │ └── session.routes.js
+│ │ ├── session.routes.js
+│ │ ├── dashboard.route.js # /api/dashboard (usuario normal)
+│ │ ├── adminDashboard.routes.js # /api/admin-dashboard
+│ │ ├── biblioDashboard.route.js # /api/bibliotecario-dashboard
+│ │ └── reports.routes.js # /api/reports
 │ ├── queries/ # Consultas a base de datos
 │ │ ├── books.queries.js
 │ │ ├── copies.queries.js
@@ -76,12 +87,15 @@ BibliotecaFCyT-Proyect/
 │ │ ├── notifications.queries.js
 │ │ └── session.queries.js
 │ ├── jobs/
-│ │ └── loan.checker.js # Job automático para préstamos vencidos
+│ │ ├── loan.checker.js # Job por hora: préstamos vencidos, renovaciones y sanciones automáticas
+│ │ └── session.job.js # Job cada 5 min: limpieza de sesiones expiradas
+│ ├── models/ # Modelos de datos
 │ ├── utils/
 │ │ ├── validators.js # Validadores reutilizables
 │ │ └── storage.js # Utilidades de almacenamiento
 │ └── services/ # Servicios reutilizables
 │
+├── database.sql # Script de creación de la base de datos
 └── .env # Variables de entorno (no subir a git)
 ```
 
@@ -259,6 +273,22 @@ PATCH  /api/notifications/leidas            - Marcar todas las notificaciones co
 GET    /api/sessions                        - Ver historial de sesiones                      🔒 admin
 ```
 
+### Dashboards
+```
+GET    /api/dashboard/mis-estadisticas               - Estadísticas del usuario normal        🔒 Requiere auth
+GET    /api/admin-dashboard/mis-estadisticas          - Estadísticas generales del admin       🔒 admin
+GET    /api/admin-dashboard/extra-stats               - Estadísticas adicionales del admin     🔒 admin
+GET    /api/bibliotecario-dashboard/mis-estadisticas  - Estadísticas del bibliotecario         🔒 bibliotecario / admin
+```
+
+### Reportes
+```
+GET    /api/reports/config                  - Configuración disponible para reportes          🔒 bibliotecario / admin
+GET    /api/reports/generar                 - Generar reporte                                 🔒 bibliotecario / admin
+GET    /api/reports/buscar-usuario          - Buscar usuario para reporte                      🔒 bibliotecario / admin
+GET    /api/reports/buscar-libro            - Buscar libro para reporte                        🔒 bibliotecario / admin
+```
+
 ---
 
 ## 🔐 Autenticación y Autorización
@@ -278,10 +308,12 @@ Authorization: Bearer <token>
 
 ### Middlewares disponibles
 ```javascript
-const { verifyToken } = require('./middlewares/auth')       // Verifica el JWT
-const { isAdmin } = require('./middlewares/roles')          // admin o bibliotecario
-const { isBibliotecario } = require('./middlewares/roles')  // bibliotecario o admin
-const { isNormal } = require('./middlewares/roles')         // cualquier usuario autenticado
+const { verifyToken } = require('./middlewares/auth')                        // Verifica el JWT
+const { isAdmin, isBibliotecario, isNormal, checkNotSancionado } = require('./middlewares/roles')
+// isAdmin              -> solo rol admin
+// isBibliotecario      -> bibliotecario o admin
+// isNormal             -> cualquier usuario autenticado
+// checkNotSancionado   -> bloquea la acción si el usuario tiene sanciones activas (usado, por ej., al crear préstamos)
 ```
 
 ---
@@ -328,4 +360,4 @@ module.exports = pool;
 
 ---
 
-**Última actualización:** 23 de Junio de 2026
+**Última actualización:** 21 de Julio de 2026
