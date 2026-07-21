@@ -10,7 +10,7 @@ router.get('/:id', getCopy)
 
 // Solo bibliotecario
 router.post('/', verifyToken, isBibliotecario, addCopy)
-router.patch('/:id/estado', verifyToken, isAdmin, updateStatus)
+router.patch('/:id/estado', verifyToken, isBibliotecario, updateStatus)
 router.delete('/:id', verifyToken, isAdmin, removeCopy)
 
 module.exports = router
