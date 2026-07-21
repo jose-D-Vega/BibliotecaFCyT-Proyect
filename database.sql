@@ -146,3 +146,76 @@ CREATE TABLE public.sanciones (
   CONSTRAINT sanciones_id_admin_fkey FOREIGN KEY (id_admin) REFERENCES public.usuarios(id_usuario),
   CONSTRAINT sanciones_id_usuario_fkey FOREIGN KEY (id_usuario) REFERENCES public.usuarios(id_usuario)
 );
+
+CREATE INDEX idx_historial_actividades_fecha ON public.historial_actividades (fecha DESC);
+CREATE INDEX idx_historial_actividades_usuario ON public.historial_actividades (id_usuario);
+CREATE INDEX idx_historial_actividades_entidad_accion ON public.historial_actividades (entidad, tipo_accion);
+
+-- ============================================================
+-- Índices de optimización — BibliotecaFCyT
+-- ============================================================
+
+-- ============================================================
+-- Requisito para los índices de búsqueda por texto (trigram):
+-- Ejecutar UNA sola vez antes de las líneas de libros_titulo_trgm/autor_trgm.
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ── prestamos ──
+-- Foreign keys sin índice (usadas en casi todos los joins de loans.queries.js)
+CREATE INDEX IF NOT EXISTS idx_prestamos_id_usuario ON public.prestamos (id_usuario);
+CREATE INDEX IF NOT EXISTS idx_prestamos_id_bibliotecario ON public.prestamos (id_bibliotecario);
+CREATE INDEX IF NOT EXISTS idx_prestamos_id_prestamo_original ON public.prestamos (id_prestamo_original);
+CREATE INDEX IF NOT EXISTS idx_prestamos_id_bibliotecario_activacion ON public.prestamos (id_bibliotecario_activacion);
+
+-- Columnas usadas en WHERE y ORDER BY en getLoans/countLoans
+CREATE INDEX IF NOT EXISTS idx_prestamos_estado ON public.prestamos (estado_prestamo);
+CREATE INDEX IF NOT EXISTS idx_prestamos_fecha_solicitud ON public.prestamos (fecha_solicitud DESC);
+CREATE INDEX IF NOT EXISTS idx_prestamos_es_reserva ON public.prestamos (es_reserva);
+
+-- Índice compuesto: acelera el patrón más común (filtrar por usuario + ordenar por fecha)
+CREATE INDEX IF NOT EXISTS idx_prestamos_usuario_fecha ON public.prestamos (id_usuario, fecha_solicitud DESC);
+
+-- ── detalles_prestamos ──
+-- La PK ya cubre (id_prestamo, id_ejemplar), pero falta el sentido inverso
+-- para cuando se busca por ejemplar primero (ej: ¿qué préstamos usaron este ejemplar?)
+CREATE INDEX IF NOT EXISTS idx_detalles_id_ejemplar ON public.detalles_prestamos (id_ejemplar);
+CREATE INDEX IF NOT EXISTS idx_detalles_estado ON public.detalles_prestamos (estado_prestamo_ejemplar);
+
+-- ── ejemplares ──
+CREATE INDEX IF NOT EXISTS idx_ejemplares_id_libro ON public.ejemplares (id_libro);
+CREATE INDEX IF NOT EXISTS idx_ejemplares_estado ON public.ejemplares (estado_ejemplar);
+
+-- ── libros ──
+CREATE INDEX IF NOT EXISTS idx_libros_activo ON public.libros (activo);
+CREATE INDEX IF NOT EXISTS idx_libros_tipo_material ON public.libros (tipo_material);
+-- Búsqueda de libros por título/autor (usado en BuscadorLibroFiltro, catálogo)
+CREATE INDEX IF NOT EXISTS idx_libros_titulo_trgm ON public.libros USING gin (titulo gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_libros_autor_trgm ON public.libros USING gin (autor gin_trgm_ops);
+
+-- ── usuarios ──
+CREATE INDEX IF NOT EXISTS idx_usuarios_id_tipo_usuario ON public.usuarios (id_tipo_usuario);
+CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON public.usuarios (activo);
+-- Login por correo (usado en auth.controller / passport)
+CREATE INDEX IF NOT EXISTS idx_usuarios_correo ON public.usuarios (correo);
+
+-- ── sanciones ──
+CREATE INDEX IF NOT EXISTS idx_sanciones_id_usuario ON public.sanciones (id_usuario);
+CREATE INDEX IF NOT EXISTS idx_sanciones_id_prestamo ON public.sanciones (id_prestamo);
+CREATE INDEX IF NOT EXISTS idx_sanciones_estado ON public.sanciones (estado_sancion);
+
+-- ── devoluciones ──
+CREATE INDEX IF NOT EXISTS idx_devoluciones_id_prestamo ON public.devoluciones (id_prestamo);
+CREATE INDEX IF NOT EXISTS idx_devoluciones_id_ejemplar ON public.devoluciones (id_ejemplar);
+
+-- ── notificaciones ──
+-- Muy consultada: "notificaciones no leídas del usuario X"
+CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_leida ON public.notificaciones (id_usuario, leida);
+
+-- ── sesiones ──
+CREATE INDEX IF NOT EXISTS idx_sesiones_id_usuario ON public.sesiones (id_usuario);
+CREATE INDEX IF NOT EXISTS idx_sesiones_sid ON public.sesiones (sid);
+
+
+-- Para ver el efecto real, corré ANALYZE después de crear los índices:
+ANALYZE;
