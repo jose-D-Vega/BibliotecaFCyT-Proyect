@@ -95,7 +95,8 @@ BibliotecaFCyT-Proyect/
 │ │ └── storage.js # Utilidades de almacenamiento
 │ └── services/ # Servicios reutilizables
 │
-├── database.sql # Script de creación de la base de datos
+├── database.sql # Script de creación de la base de datos (esquema)
+├── seed.sql # Datos de prueba para desarrollo local
 └── .env # Variables de entorno (no subir a git)
 ```
 
@@ -141,7 +142,32 @@ cd BibliotecaFCyT-Proyect
 npm install
 ```
 
-### 3. Configurar variables de entorno
+### 3. Configurar la base de datos
+El repositorio incluye dos scripts SQL en la raíz:
+
+- **`database.sql`** — esquema completo (tablas, constraints, checks e índices).
+- **`seed.sql`** — datos de prueba (usuarios, libros, ejemplares, préstamos, sanciones, notificaciones, etc.) listos para desarrollo local.
+
+Pasos:
+
+- Si ya tenés un proyecto de **Supabase** con la base de datos cargada (como en este equipo), no hace falta ejecutar nada: solo apuntá `DATABASE_URL`/`SUPABASE_URL` (paso siguiente) a ese proyecto.
+- Si necesitás crear la base de datos desde cero (proyecto nuevo de Supabase o PostgreSQL local):
+  1. Creá una base de datos vacía (en Supabase: `Project Settings → Database`, o localmente con `createdb bibliotecafcyt`).
+  2. Ejecutá `database.sql` sobre esa base para crear el esquema:
+     - **Supabase**: pegá el contenido de `database.sql` en el **SQL Editor** del panel de Supabase y ejecutalo.
+     - **PostgreSQL local**: `psql -U tu_usuario -d bibliotecafcyt -f database.sql`
+  3. (Opcional) Ejecutá `seed.sql` de la misma forma para poblar la base con datos de prueba:
+     - **Supabase**: pegá el contenido de `seed.sql` en el **SQL Editor** y ejecutalo.
+     - **PostgreSQL local**: `psql -U tu_usuario -d bibliotecafcyt -f seed.sql`
+
+     ⚠️ `seed.sql` empieza con `TRUNCATE ... RESTART IDENTITY CASCADE`: borra los datos existentes de esas tablas antes de insertar los nuevos. Usalo solo en una base de desarrollo propia, nunca contra la base compartida del equipo con datos reales.
+
+     Como el login es únicamente por Google OAuth (no hay contraseña local), para poder iniciar sesión con alguno de los usuarios del seed hay que asociarle tu `google_id` real, por ejemplo:
+     ```sql
+     UPDATE usuarios SET google_id = 'TU_GOOGLE_ID' WHERE correo = 'admin@fctunca.edu.py';
+     ```
+
+### 4. Configurar variables de entorno
 Copiar `.env.example` a `.env` y completar los valores:
 ```env
 PORT=3210
@@ -156,7 +182,7 @@ SUPABASE_SERVICE_KEY=tu-service-role-key
 NODE_ENV=development
 ```
 
-### 4. Iniciar el servidor
+### 5. Iniciar el servidor
 ```bash
 # Modo desarrollo (con nodemon)
 npm run dev
