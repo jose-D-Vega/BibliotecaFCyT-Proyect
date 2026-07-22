@@ -11,7 +11,8 @@ const {
   getDevolucionesUsuarioHandler,
   resolveReservaAfectadaHandler,
   recuperarEjemplarPerdidoHandler, 
-  reemplazarEjemplarPerdidoHandler
+  reemplazarEjemplarPerdidoHandler,
+  getDetalleDevolucionUsuarioHandler
 } = require("../controllers/returns.controller");
 const { verifyToken } = require("../middlewares/auth");
 const { isBibliotecario } = require("../middlewares/roles");
@@ -19,6 +20,7 @@ const { isBibliotecario } = require("../middlewares/roles");
 
 
 router.get('/mis-devoluciones', verifyToken, getDevolucionesUsuarioHandler);
+router.get('/mis-devoluciones/:id/detalle', verifyToken, getDetalleDevolucionUsuarioHandler);
 
 // Solo bibliotecario y admin
 

@@ -553,10 +553,18 @@ const getPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta, i
       u.correo,
       u.ci,
       ba.nombre_apellido AS bibliotecario_activacion,
-      COUNT(DISTINCT dp.id_ejemplar) AS total_ejemplares,
-      COUNT(DISTINCT l.id_libro) AS total_libros,
+      COUNT(DISTINCT dp.id_ejemplar) FILTER (
+        WHERE dp.estado_prestamo_ejemplar NOT IN ('solicitado', 'rechazado', 'cancelado')
+      ) AS total_ejemplares,
+      COUNT(DISTINCT l.id_libro) FILTER (
+        WHERE dp.estado_prestamo_ejemplar NOT IN ('solicitado', 'rechazado', 'cancelado')
+      ) AS total_libros,
       COUNT(DISTINCT d.id_ejemplar) AS ejemplares_devueltos,
       BOOL_OR(d.estado_devuelto != 'bueno') AS tiene_problemas,
+      (
+        BOOL_OR(dp.estado_prestamo_ejemplar IN ('perdido', 'reemplazado'))
+        OR BOOL_OR(p.estado_prestamo = 'cerrado_con_perdida')
+      ) AS tiene_perdida,
       MAX(d.fecha_devolucion) AS ultima_devolucion
     FROM prestamos p
     JOIN usuarios u ON p.id_usuario = u.id_usuario
@@ -613,7 +621,6 @@ const countPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta,
 }
 
 const getDetalleDevoluciones = async (id_prestamo) => {
-  // Resolver el id correcto para detalles_prestamos (para renovaciones)
   const { rows: prestamoInfo } = await pool.query(
     `SELECT COALESCE(id_prestamo_original, id_prestamo) AS id_detalles
      FROM prestamos WHERE id_prestamo = $1`,
@@ -623,21 +630,24 @@ const getDetalleDevoluciones = async (id_prestamo) => {
 
   const { rows: detalles } = await pool.query(
     `SELECT
-       d.id_devolucion,
-       d.id_ejemplar,
-       d.fecha_devolucion,
-       d.estado_devuelto,
-       d.observaciones,
-       l.titulo,
-       l.autor,
-       b.nombre_apellido AS bibliotecario
-     FROM devoluciones d
-     JOIN ejemplares e ON d.id_ejemplar = e.id_ejemplar
-     JOIN libros l ON e.id_libro = l.id_libro
-     JOIN usuarios b ON d.id_bibliotecario = b.id_usuario
-     WHERE d.id_prestamo = $1
-     ORDER BY d.fecha_devolucion ASC`,
-    [id_prestamo]
+      d.id_devolucion,
+      d.id_ejemplar,
+      d.fecha_devolucion,
+      d.estado_devuelto,
+      d.observaciones,
+      l.titulo,
+      l.autor,
+      b.nombre_apellido AS bibliotecario
+    FROM devoluciones d
+    JOIN ejemplares e ON d.id_ejemplar = e.id_ejemplar
+    JOIN libros l ON e.id_libro = l.id_libro
+    JOIN usuarios b ON d.id_bibliotecario = b.id_usuario
+    WHERE d.id_prestamo IN (
+      SELECT id_prestamo FROM prestamos
+      WHERE id_prestamo = $1 OR id_prestamo_original = $1
+    )
+    ORDER BY d.fecha_devolucion ASC`,
+    [id_detalles]
   )
 
   const { rows: pendientes } = await pool.query(
@@ -673,24 +683,37 @@ const getDetalleDevoluciones = async (id_prestamo) => {
 }
 
 const getDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_hasta, limit, offset }) => {
-  const values = []
-  let paramIndex = 1
-  let whereClause = `WHERE p.id_usuario = $${paramIndex}`
-  values.push(id_usuario)
-  paramIndex++
+  const values = [id_usuario]
+  let paramIndex = 2
+  // Estos filtros deciden QUÉ préstamos mostrar, pero no deben recortar las
+  // filas usadas para calcular los totales agregados del préstamo (eso fue
+  // lo que causaba el "2/1" al buscar por un libro específico dentro de un
+  // préstamo con varios materiales distintos).
+  let filtroExtra = ''
 
   if (search) {
-    whereClause += ` AND l.titulo ILIKE $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM detalles_prestamos dpf
+      JOIN ejemplares ef ON dpf.id_ejemplar = ef.id_ejemplar
+      JOIN libros lf ON ef.id_libro = lf.id_libro
+      WHERE dpf.id_prestamo = c.id_raiz AND lf.titulo ILIKE $${paramIndex}
+    )`
     values.push(`%${search}%`)
     paramIndex++
   }
   if (fecha_desde) {
-    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM devoluciones df
+      WHERE df.id_prestamo = c.id_prestamo AND df.fecha_devolucion::date >= $${paramIndex}
+    )`
     values.push(fecha_desde)
     paramIndex++
   }
   if (fecha_hasta) {
-    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM devoluciones df
+      WHERE df.id_prestamo = c.id_prestamo AND df.fecha_devolucion::date <= $${paramIndex}
+    )`
     values.push(fecha_hasta)
     paramIndex++
   }
@@ -699,28 +722,57 @@ const getDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_h
   values.push(offset)
 
   const { rows } = await pool.query(
-    `SELECT
-       p.id_prestamo,
-       p.id_prestamo_original,
-       p.numero_renovacion,
-       p.fecha_activacion,
-       p.fecha_tope_devolucion,
-       p.estado_prestamo,
-       p.es_reserva,
-       COUNT(DISTINCT dp.id_ejemplar) AS total_ejemplares,
-       COUNT(DISTINCT l.id_libro) AS total_libros,
+    `WITH cadena AS (
+       SELECT
+         p.id_prestamo,
+         COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz,
+         p.numero_renovacion,
+         p.fecha_activacion,
+         p.fecha_tope_devolucion,
+         p.estado_prestamo,
+         p.es_reserva
+       FROM prestamos p
+       WHERE p.id_usuario = $1
+     )
+     SELECT
+       c.id_raiz AS id_prestamo,
+       MAX(c.numero_renovacion) AS numero_renovacion,
+       MAX(c.fecha_activacion) AS fecha_activacion,
+       MAX(c.fecha_tope_devolucion) AS fecha_tope_devolucion,
+       (ARRAY_AGG(c.estado_prestamo ORDER BY c.numero_renovacion DESC))[1] AS estado_prestamo,
+       BOOL_OR(c.es_reserva) AS es_reserva,
+       -- Solo contamos ejemplares que realmente formaron parte del préstamo
+       -- (excluye ítems rechazados/cancelados en aprobaciones parciales, que
+       -- nunca llegaron a prestarse y por lo tanto nunca hay que devolver)
+       COUNT(DISTINCT dp.id_ejemplar) FILTER (
+         WHERE dp.estado_prestamo_ejemplar NOT IN ('solicitado', 'rechazado', 'cancelado')
+       ) AS total_ejemplares,
+       COUNT(DISTINCT l.id_libro) FILTER (
+         WHERE dp.estado_prestamo_ejemplar NOT IN ('solicitado', 'rechazado', 'cancelado')
+       ) AS total_libros,
        COUNT(DISTINCT d.id_ejemplar) AS ejemplares_devueltos,
        BOOL_OR(d.estado_devuelto != 'bueno') AS tiene_problemas,
+       -- Detecta pérdidas aunque ya se hayan resuelto (recuperado/reemplazado)
+       -- o sigan pendientes de resolver
+       (
+         BOOL_OR(dp.estado_prestamo_ejemplar IN ('perdido', 'reemplazado'))
+         OR BOOL_OR(c.estado_prestamo = 'cerrado_con_perdida')
+       ) AS tiene_perdida,
        MAX(d.fecha_devolucion) AS ultima_devolucion
-     FROM prestamos p
-     JOIN detalles_prestamos dp
-       ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
+     FROM cadena c
+     JOIN detalles_prestamos dp ON dp.id_prestamo = c.id_raiz
      JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
      JOIN libros l ON e.id_libro = l.id_libro
-     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
-     ${whereClause}
-     GROUP BY p.id_prestamo
-     ORDER BY MAX(d.fecha_devolucion) DESC
+     -- Clave del fix: el join también debe matchear por ejemplar, no solo
+     -- por préstamo. Antes, cada ejemplar del préstamo se cruzaba con TODAS
+     -- las devoluciones del préstamo (producto cruzado), lo que arrastraba
+     -- devoluciones de otros materiales al filtrar por título.
+     LEFT JOIN devoluciones d
+       ON d.id_prestamo = c.id_prestamo AND d.id_ejemplar = dp.id_ejemplar
+     WHERE 1=1 ${filtroExtra}
+     GROUP BY c.id_raiz
+     HAVING COUNT(d.id_ejemplar) > 0
+     ORDER BY MAX(d.fecha_devolucion) DESC NULLS LAST
      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
     values
   )
@@ -728,37 +780,48 @@ const getDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_h
 }
 
 const countDevolucionesUsuario = async ({ id_usuario, search, fecha_desde, fecha_hasta }) => {
-  const values = []
-  let paramIndex = 1
-  let whereClause = `WHERE p.id_usuario = $${paramIndex}`
-  values.push(id_usuario)
-  paramIndex++
+  const values = [id_usuario]
+  let paramIndex = 2
+  let filtroExtra = ''
 
   if (search) {
-    whereClause += ` AND l.titulo ILIKE $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM detalles_prestamos dpf
+      JOIN ejemplares ef ON dpf.id_ejemplar = ef.id_ejemplar
+      JOIN libros lf ON ef.id_libro = lf.id_libro
+      WHERE dpf.id_prestamo = c.id_raiz AND lf.titulo ILIKE $${paramIndex}
+    )`
     values.push(`%${search}%`)
     paramIndex++
   }
   if (fecha_desde) {
-    whereClause += ` AND d.fecha_devolucion::date >= $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM devoluciones df
+      WHERE df.id_prestamo = c.id_prestamo AND df.fecha_devolucion::date >= $${paramIndex}
+    )`
     values.push(fecha_desde)
     paramIndex++
   }
   if (fecha_hasta) {
-    whereClause += ` AND d.fecha_devolucion::date <= $${paramIndex}`
+    filtroExtra += ` AND EXISTS (
+      SELECT 1 FROM devoluciones df
+      WHERE df.id_prestamo = c.id_prestamo AND df.fecha_devolucion::date <= $${paramIndex}
+    )`
     values.push(fecha_hasta)
     paramIndex++
   }
 
   const { rows } = await pool.query(
-    `SELECT COUNT(DISTINCT p.id_prestamo)
-     FROM prestamos p
-     JOIN detalles_prestamos dp
-       ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
-     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
-     JOIN libros l ON e.id_libro = l.id_libro
-     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
-     ${whereClause}`,
+    `WITH cadena AS (
+       SELECT p.id_prestamo, COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz
+       FROM prestamos p
+       WHERE p.id_usuario = $1
+     )
+     SELECT COUNT(DISTINCT c.id_raiz) AS count
+     FROM cadena c
+     WHERE EXISTS (
+       SELECT 1 FROM devoluciones df WHERE df.id_prestamo = c.id_prestamo
+     ) ${filtroExtra}`,
     values
   )
   return parseInt(rows[0].count)
@@ -1117,6 +1180,15 @@ const rejectReservaItemSinSustituto = async (id_prestamo, id_ejemplar, id_biblio
   }
 }
 
+// Verifica que el préstamo pertenezca al usuario (o sea una renovación de uno suyo)
+const getPrestamoOwner = async (id_prestamo) => {
+  const { rows } = await pool.query(
+    `SELECT id_usuario FROM prestamos WHERE id_prestamo = $1`,
+    [id_prestamo]
+  )
+  return rows[0]?.id_usuario ?? null
+}
+
 module.exports = {
   searchActiveLoans,
   getAllActiveLoans,
@@ -1133,5 +1205,6 @@ module.exports = {
   recuperarEjemplarPerdido, 
   reemplazarEjemplarPerdido,
   verificarReservaLista,
-  rejectReservaItemSinSustituto
+  rejectReservaItemSinSustituto,
+  getPrestamoOwner
 }

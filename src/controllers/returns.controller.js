@@ -2,7 +2,7 @@ const { searchActiveLoans, getAllActiveLoans, getLoanForReturn, registerReturn, 
    countHistorial, getPrestamosConDevoluciones, countPrestamosConDevoluciones, 
    getDetalleDevoluciones, getDevolucionesUsuario, countDevolucionesUsuario,
   reassignReservation, recuperarEjemplarPerdido, reemplazarEjemplarPerdido,
-  rejectReservaItemSinSustituto } = require('../queries/returns.queries')
+  rejectReservaItemSinSustituto, getPrestamoOwner } = require('../queries/returns.queries')
 const { registrarActividad } = require('../queries/activity.queries')
 
 const getAllActiveLoansHandler = async (req, res) => {
@@ -276,8 +276,30 @@ const reemplazarEjemplarPerdidoHandler = async (req, res) => {
   }
 }
 
+const getDetalleDevolucionUsuarioHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const id_usuario = req.user.id_usuario
+
+    const propietario = await getPrestamoOwner(id)
+    if (!propietario) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' })
+    }
+    if (propietario !== id_usuario) {
+      return res.status(403).json({ error: 'No tenés permiso para ver este préstamo' })
+    }
+
+    const data = await getDetalleDevoluciones(id)
+    res.json({ data })
+  } catch (error) {
+    console.error('Error al obtener detalle del usuario:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = { searchLoansHandler, getAllActiveLoansHandler, 
   getLoanHandler, registerReturnHandler, 
   getHistorialHandler, getPrestamosConDevolucionesHandler, 
   getDetalleDevolucionesHandler, getDevolucionesUsuarioHandler,
-  resolveReservaAfectadaHandler, recuperarEjemplarPerdidoHandler, reemplazarEjemplarPerdidoHandler }
+  resolveReservaAfectadaHandler, recuperarEjemplarPerdidoHandler, 
+  reemplazarEjemplarPerdidoHandler, getDetalleDevolucionUsuarioHandler }
