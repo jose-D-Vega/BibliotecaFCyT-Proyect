@@ -67,8 +67,7 @@ INSERT INTO libros (titulo, autor, cantidad_ejemplar, ciudad, facultad, tipo_mat
   ('Circuitos Eléctricos',              'James Nilsson',        2, 'Coronel Oviedo', 'FCyT', 'libro',  2015, 'Pearson',    'Ingeniería Eléctrica',   true, NULL),
   ('Física General',                    'Raymond Serway',       3, 'Coronel Oviedo', 'FCyT', 'libro',  2014, 'Cengage',    'Ingeniería Eléctrica',   true, NULL),
   ('Ingeniería de Software',            'Ian Sommerville',      2, 'Coronel Oviedo', 'FCyT', 'libro',  2019, 'Pearson',    'Ingeniería Informática', true, NULL),
-  ('Revista de Investigación FCyT N°12','Varios Autores',       1, 'Coronel Oviedo', 'FCyT', 'revista',2022, 'FCyT-UNCA',  NULL,                     true, NULL),
-  ('Tesis: Sistemas Distribuidos aplicados a IoT', 'M. Fernández', 1, 'Coronel Oviedo', 'FCyT', 'tesis', 2021, NULL, 'Ingeniería Informática', true, NULL);
+  ('Tesis: Sistemas Distribuidos aplicados a IoT', 'M. Fernández', 1, 'Coronel Oviedo', 'FCyT', 'tfg', 2021, NULL, 'Ingeniería Informática', true, NULL);
 
 -- ============================================================
 -- 4. ejemplares (cantidad acorde a libros.cantidad_ejemplar)

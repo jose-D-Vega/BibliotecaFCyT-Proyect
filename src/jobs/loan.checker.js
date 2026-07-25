@@ -1,6 +1,7 @@
 const cron = require('node-cron')
 const pool = require('../config/db')
 const { crearNotificacion } = require('../queries/notifications.queries')
+const { DIAS_PLACEHOLDER_SOLICITUD } = require('../config/loans.config')
 
 const verificarPrestamos = async () => {
   const client = await pool.connect()
@@ -51,6 +52,64 @@ const verificarPrestamos = async () => {
         id_prestamo: renovacion.id_prestamo_original,
         unica: true
       }, client)
+    }
+
+    // -------------- Solicitudes de préstamo/reserva sin gestionar que superaron el plazo ----------
+    // fecha_tope_devolucion es un placeholder (fecha_solicitud + DIAS_PLACEHOLDER_SOLICITUD días)
+    // hasta que el bibliotecario responde la solicitud. Si nadie la gestiona y ese plazo se
+    // cumple, se rechaza automáticamente para que no quede pendiente indefinidamente.
+
+    const { rows: solicitudesVencidas } = await client.query(
+      `SELECT * FROM prestamos
+       WHERE estado_prestamo IN ('solicitado', 'solicitud_reserva')
+         AND fecha_tope_devolucion < $1`,
+      [hoy]
+    )
+
+    for (const solicitud of solicitudesVencidas) {
+      const nuevoEstado = solicitud.es_reserva ? 'reserva_rechazada' : 'rechazado'
+
+      await client.query(
+        `UPDATE prestamos SET estado_prestamo = $1
+         WHERE id_prestamo = $2`,
+        [nuevoEstado, solicitud.id_prestamo]
+      )
+
+      // Los detalles de una solicitud nunca gestionada siguen todos en 'solicitado'
+      await client.query(
+        `UPDATE detalles_prestamos SET estado_prestamo_ejemplar = 'rechazado'
+         WHERE id_prestamo = $1 AND estado_prestamo_ejemplar = 'solicitado'`,
+        [solicitud.id_prestamo]
+      )
+
+      await crearNotificacion({
+        id_usuario: solicitud.id_usuario,
+        tipo: solicitud.es_reserva ? 'reserva_rechazada' : 'prestamo_rechazado',
+        titulo: solicitud.es_reserva ? 'Reserva rechazada' : 'Préstamo rechazado',
+        mensaje: `Tu solicitud de ${solicitud.es_reserva ? 'reserva' : 'préstamo'} fue rechazada automáticamente por no haber sido gestionada dentro de los ${DIAS_PLACEHOLDER_SOLICITUD} días desde que la solicitaste.`,
+        id_prestamo: solicitud.id_prestamo,
+        unica: true
+      }, client)
+    }
+
+    // Notificar a admins si hubo solicitudes rechazadas automáticamente por falta de gestión
+    if (solicitudesVencidas.length > 0) {
+      const { rows: admins } = await client.query(
+        `SELECT u.id_usuario FROM usuarios u
+        JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
+        WHERE t.nombre_tipo = 'admin' or t.nombre_tipo = 'bibliotecario' AND u.activo = true`
+      )
+      for (const admin of admins) {
+        await crearNotificacion({
+          id_usuario: admin.id_usuario,
+          tipo: 'admin_solicitud_rechazada',
+          titulo: 'Solicitudes rechazadas automáticamente',
+          mensaje: `${solicitudesVencidas.length} solicitud${solicitudesVencidas.length > 1 ? 'es' : ''} de préstamo/reserva se rechazó${solicitudesVencidas.length > 1 ? 'aron' : ''} automáticamente por no haber sido gestionada${solicitudesVencidas.length > 1 ? 's' : ''} a tiempo.`,
+          id_prestamo: null,
+          rol_destino: 'admin',
+          unica: true
+        }, client)
+      }
     }
 
     // -------------- Préstamos en pendiente_devolucion que superaron su nueva fecha tope ----------
@@ -289,7 +348,7 @@ const verificarPrestamos = async () => {
       const { rows: admins } = await client.query(
         `SELECT u.id_usuario FROM usuarios u
         JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
-        WHERE t.nombre_tipo = 'admin' AND u.activo = true`
+        WHERE t.nombre_tipo = 'admin' or t.nombre_tipo = 'bibliotecario' AND u.activo = true`
       )
 
       for (const admin of admins) {

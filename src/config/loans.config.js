@@ -24,8 +24,10 @@ const DIAS_LIMITE_RESPUESTA_RENOVACION = 2
 const DIAS_MARGEN_DEVOLUCION_TRAS_RECHAZO_RENOVACION = 2
 
 // Fecha "placeholder" para el campo fecha_tope_devolucion al crear una solicitud
-// (todavía no hay fecha real hasta que se aprueba/activa el préstamo).
-const DIAS_PLACEHOLDER_SOLICITUD = 30
+// (todavía no hay fecha real hasta que se aprueba/activa el préstamo). También
+// funciona como el plazo máximo que tiene el bibliotecario para gestionar una
+// solicitud antes de que el job la rechace automáticamente por falta de gestión.
+const DIAS_PLACEHOLDER_SOLICITUD = 7
 
 // Cantidad máxima de préstamos/reservas simultáneos que puede tener un usuario.
 // Cuenta cada cadena de préstamo una sola vez (un préstamo renovado no suma

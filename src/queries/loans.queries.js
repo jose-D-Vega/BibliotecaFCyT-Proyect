@@ -124,6 +124,21 @@ const createLoan = async (id_usuario, itemsCarrito) => {
   try {
     await client.query('BEGIN')
 
+    // Los TFG son solo de consulta: se pueden ver en el catálogo, pero no
+    // se pueden solicitar como préstamo ni reservar.
+    const idsLibros = itemsCarrito.map(item => item.id_libro)
+    const { rows: tfgSolicitados } = await client.query(
+      `SELECT id_libro, titulo FROM libros WHERE id_libro = ANY($1) AND tipo_material = 'tfg'`,
+      [idsLibros]
+    )
+
+    if (tfgSolicitados.length > 0) {
+      await client.query('ROLLBACK')
+      return {
+        error: `Los siguientes materiales son Trabajos Finales de Grado y solo están disponibles para consulta, no para préstamo: ${tfgSolicitados.map(l => l.titulo).join(', ')}`
+      }
+    }
+
     const ejemplaresParaPrestamo = []
     const ejemplaresParaReserva = []
     const advertencias = []
@@ -211,7 +226,7 @@ const createLoan = async (id_usuario, itemsCarrito) => {
       if (prestamosActuales + nuevosRegistros > MAX_PRESTAMOS_SIMULTANEOS) {
         await client.query('ROLLBACK')
         return {
-          error: `Ya tenés ${prestamosActuales} préstamo(s)/reserva(s) solicitados de un máximo de ${MAX_PRESTAMOS_SIMULTANEOS}. Esta solicitud generaría ${nuevosRegistros} más, superando el límite.`
+          error: `Ya tenés ${prestamosActuales} préstamo(s)/reserva(s) activos de un máximo de ${MAX_PRESTAMOS_SIMULTANEOS}. Esta solicitud generaría ${nuevosRegistros} más, superando el límite.`
         }
       }
     }
