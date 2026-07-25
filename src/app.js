@@ -15,8 +15,7 @@ const notificationsRoutes = require('./routes/notifications.routes')
 const returnsRoutes = require('./routes/returns.routes')
 const sanctionsRoutes = require('./routes/sanctions.routes')
 const reportsRoutes = require('./routes/reports.routes')
-
-const adminDashboardRoutes = require('./routes/adminDashboard.routes')
+const dashboardRoutes = require('./routes/dashboard.routes')
 
 const errorHandler = require('./middlewares/error.middleware')
 
@@ -44,10 +43,7 @@ app.use('/api/notifications', notificationsRoutes)
 app.use('/api/returns', returnsRoutes)
 app.use('/api/sanctions', sanctionsRoutes)
 app.use('/api/reports', reportsRoutes)
-app.use('/api/admin-dashboard', adminDashboardRoutes)
-
-app.use('/api/dashboard', require('./routes/dashboard.route'))
-app.use('/api/bibliotecario-dashboard', require('./routes/biblioDashboard.route'))
+app.use('/api/dashboard', dashboardRoutes)
 
 // Ruta base — por si alguien entra a la raíz del servidor
 app.get('/', (req, res) => {
