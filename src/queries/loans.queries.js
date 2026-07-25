@@ -8,7 +8,8 @@ const {
   MAX_RENOVACIONES,
   DIAS_LIMITE_RESPUESTA_RENOVACION,
   DIAS_MARGEN_DEVOLUCION_TRAS_RECHAZO_RENOVACION,
-  DIAS_PLACEHOLDER_SOLICITUD
+  DIAS_PLACEHOLDER_SOLICITUD,
+  MAX_PRESTAMOS_SIMULTANEOS
 } = require('../config/loans.config')
 
 const { verificarReservaLista } = require('./returns.queries')
@@ -180,6 +181,37 @@ const createLoan = async (id_usuario, itemsCarrito) => {
           advertencias.push(
             `Solo se pudieron asignar ${cantidadDisponible + reservables.length} de ${cantidad} ejemplares solicitados para el libro con id ${id_libro}`
           )
+        }
+      }
+    }
+
+    // Cuántas filas nuevas va a insertar esta solicitud (préstamo directo, reserva, o ambos)
+    const nuevosRegistros =
+      (ejemplaresParaPrestamo.length > 0 ? 1 : 0) +
+      (ejemplaresParaReserva.length > 0 ? 1 : 0)
+
+    if (nuevosRegistros > 0) {
+      // Cuenta cada cadena de préstamo una sola vez (COALESCE con
+      // id_prestamo_original), para que un préstamo renovado —que tiene
+      // varias filas en `prestamos`— no cuente doble. Las reservas cuentan
+      // igual que los préstamos activos.
+      const { rows: activosRows } = await client.query(
+        `SELECT COUNT(DISTINCT COALESCE(id_prestamo_original, id_prestamo)) AS count
+         FROM prestamos
+         WHERE id_usuario = $1
+           AND estado_prestamo NOT IN (
+             'rechazado', 'cancelado', 'devuelto', 'renovado',
+             'renovacion_finalizada', 'cerrado_con_perdida', 'reserva_rechazada'
+           )`,
+        [id_usuario]
+      )
+
+      const prestamosActuales = parseInt(activosRows[0].count)
+
+      if (prestamosActuales + nuevosRegistros > MAX_PRESTAMOS_SIMULTANEOS) {
+        await client.query('ROLLBACK')
+        return {
+          error: `Ya tenés ${prestamosActuales} préstamo(s)/reserva(s) solicitados de un máximo de ${MAX_PRESTAMOS_SIMULTANEOS}. Esta solicitud generaría ${nuevosRegistros} más, superando el límite.`
         }
       }
     }

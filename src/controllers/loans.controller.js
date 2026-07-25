@@ -12,6 +12,7 @@ const {
   rejectRenewal
 } = require('../queries/loans.queries')
 const { registrarActividad } = require('../queries/activity.queries')
+const { MAX_EJEMPLARES_POR_SOLICITUD } = require('../config/loans.config')
 
 const createLoanHandler = async (req, res) => {
   try {
@@ -29,6 +30,14 @@ const createLoanHandler = async (req, res) => {
           error: 'Cada item debe tener id_libro y cantidad mayor a 0'
         })
       }
+    }
+
+    // Máximo de ejemplares por solicitud (suma de cantidades del carrito)
+    const totalEjemplares = items.reduce((acc, item) => acc + item.cantidad, 0)
+    if (totalEjemplares > MAX_EJEMPLARES_POR_SOLICITUD) {
+      return res.status(400).json({
+        error: `No podés solicitar más de ${MAX_EJEMPLARES_POR_SOLICITUD} ejemplares en una misma solicitud (estás pidiendo ${totalEjemplares}).`
+      })
     }
 
     const result = await createLoan(id_usuario, items)

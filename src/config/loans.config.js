@@ -27,6 +27,16 @@ const DIAS_MARGEN_DEVOLUCION_TRAS_RECHAZO_RENOVACION = 2
 // (todavía no hay fecha real hasta que se aprueba/activa el préstamo).
 const DIAS_PLACEHOLDER_SOLICITUD = 30
 
+// Cantidad máxima de préstamos/reservas simultáneos que puede tener un usuario.
+// Cuenta cada cadena de préstamo una sola vez (un préstamo renovado no suma
+// doble aunque tenga varias filas en `prestamos`), y las reservas cuentan
+// igual que los préstamos activos.
+const MAX_PRESTAMOS_SIMULTANEOS = 5
+
+// Cantidad máxima de ejemplares que se pueden pedir en una misma solicitud
+// (suma de las cantidades de todos los libros del carrito).
+const MAX_EJEMPLARES_POR_SOLICITUD = 10
+
 module.exports = {
   DIAS_PRESTAMO_ACTIVO,
   DIAS_RENOVACION,
@@ -34,5 +44,7 @@ module.exports = {
   MAX_RENOVACIONES,
   DIAS_LIMITE_RESPUESTA_RENOVACION,
   DIAS_MARGEN_DEVOLUCION_TRAS_RECHAZO_RENOVACION,
-  DIAS_PLACEHOLDER_SOLICITUD
+  DIAS_PLACEHOLDER_SOLICITUD,
+  MAX_PRESTAMOS_SIMULTANEOS,
+  MAX_EJEMPLARES_POR_SOLICITUD
 }
