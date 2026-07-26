@@ -1139,9 +1139,28 @@ const renewLoan = async (id_prestamo, id_usuario) => {
     // si es la primera renovación, el original es él mismo)
     const id_original =  prestamo[0].id_prestamo_original || prestamo[0].id_prestamo
 
-    // Contar renovaciones ya hechas sobre ese original
+    // Verificar que no haya ya una renovación pendiente de respuesta para esta cadena.
+    // Sin este chequeo, como el préstamo activo nunca cambia de estado al solicitar
+    // una renovación, se podían crear múltiples solicitudes duplicadas.
+    const { rows: renovacionPendiente } = await client.query(
+      `SELECT id_prestamo FROM prestamos
+       WHERE id_prestamo_original = $1 AND estado_prestamo = 'solicitud_renovacion'`,
+      [id_original]
+    )
+
+    if (renovacionPendiente.length > 0) {
+      await client.query('ROLLBACK')
+      return { error: 'Ya existe una solicitud de renovación pendiente de aprobación para este préstamo' }
+    }
+
+
+    // Contar renovaciones ya hechas sobre ese original. Se excluyen las
+    // canceladas por el propio usuario ('cancelado'): al no haber sido nunca
+    // gestionadas por un bibliotecario, es como si no hubieran existido — no
+    // deben ocupar un número de renovación ni consumir el límite.
     const { rows: renovaciones } = await client.query(
-      `SELECT COUNT(*) FROM prestamos WHERE id_prestamo_original = $1`,
+      `SELECT COUNT(*) FROM prestamos
+       WHERE id_prestamo_original = $1 AND estado_prestamo != 'cancelado'`,
       [id_original]
     )
 
@@ -1190,20 +1209,25 @@ const renewLoan = async (id_prestamo, id_usuario) => {
 
     await client.query('COMMIT')
 
-    // Avisar a los admins — fuera de la transacción, ya confirmada
-    const { rows: admins } = await pool.query(
-      `SELECT u.id_usuario FROM usuarios u
+    // Avisar a admins y bibliotecarios — fuera de la transacción, ya confirmada.
+    // Antes solo se avisaba a 'admin', pero quien normalmente gestiona estas
+    // solicitudes es el bibliotecario (la ruta de aprobar/rechazar usa
+    // isBibliotecario, que permite ambos roles). Se trae también nombre_tipo
+    // porque rol_destino tiene que coincidir con el rol activo de cada
+    // destinatario o el filtro de notificaciones no se la va a mostrar.
+    const { rows: staff } = await pool.query(
+      `SELECT u.id_usuario, t.nombre_tipo FROM usuarios u
        JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
-       WHERE t.nombre_tipo = 'admin' AND u.activo = true`
+       WHERE t.nombre_tipo IN ('admin', 'bibliotecario') AND u.activo = true`
     )
-    for (const admin of admins) {
+    for (const persona of staff) {
       await crearNotificacion({
-        id_usuario: admin.id_usuario,
+        id_usuario: persona.id_usuario,
         tipo: 'admin_renovacion_pendiente',
         titulo: 'Nueva solicitud de renovación',
         mensaje: `Hay una solicitud de renovación esperando revisión (préstamo #${id_prestamo}).`,
         id_prestamo,
-        rol_destino: 'admin',
+        rol_destino: persona.nombre_tipo,
         unica: true
       })
     }
@@ -1371,6 +1395,49 @@ const rejectRenewal = async (id_renovacion, id_bibliotecario) => {
   }
 }
 
+// El usuario cancela su propia solicitud de renovación antes de que el
+// bibliotecario la responda. A diferencia de rejectRenewal, acá el préstamo
+// activo del cual se pidió la renovación nunca cambió de estado (sigue
+// 'activo' desde que se creó la solicitud), así que no hay nada que revertir
+// más que la fila de la solicitud misma.
+const cancelRenewal = async (id_renovacion, id_usuario) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows: renovacion } = await client.query(
+      `SELECT * FROM prestamos
+       WHERE id_prestamo = $1
+         AND id_usuario = $2
+         AND estado_prestamo = 'solicitud_renovacion'
+         AND id_prestamo_original IS NOT NULL`,
+      [id_renovacion, id_usuario]
+    )
+
+    if (renovacion.length === 0) {
+      await client.query('ROLLBACK')
+      return { error: 'Renovación no encontrada o ya fue procesada' }
+    }
+
+    const { rows: cancelada } = await client.query(
+      `UPDATE prestamos
+       SET estado_prestamo = 'cancelado',
+           fecha_cancelacion = NOW()
+       WHERE id_prestamo = $1
+       RETURNING *`,
+      [id_renovacion]
+    )
+
+    await client.query('COMMIT')
+    return cancelada[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 module.exports = {
   createLoan,
   respondLoanDetail,
@@ -1383,5 +1450,6 @@ module.exports = {
   getLoanById,
   renewLoan,
   approveRenewal,
-  rejectRenewal
+  rejectRenewal,
+  cancelRenewal
 }

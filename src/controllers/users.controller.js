@@ -102,12 +102,17 @@ const changeUserRol = async (req, res) => {
 
     const user = await updateUserRol(id, id_tipo_usuario)
 
+    // Volvemos a consultar (en vez de usar el `RETURNING *` crudo de
+    // updateUserRol) porque getUserById ya trae el nombre del rol vía JOIN
+    // con tipo_usuarios, y así el mensaje muestra el rol nuevo por nombre.
+    const actualizado = await getUserById(id)
+
     registrarActividad({
       id_usuario: req.user.id_usuario,
       tipo_accion: 'cambio_rol',
       entidad: 'usuarios',
       id_entidad: parseInt(id),
-      descripcion: `El admin cambió el rol de "${target.nombre_apellido}" de "${target.rol}" a id_tipo_usuario=${id_tipo_usuario}`
+      descripcion: `El admin cambió el rol de "${target.nombre}" de "${target.rol}" a "${actualizado.rol}"`
     }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: 'Rol actualizado exitosamente', data: user })
@@ -137,7 +142,7 @@ const toggleUserActivo = async (req, res) => {
       tipo_accion: activo ? 'activar' : 'eliminar',
       entidad: 'usuarios',
       id_entidad: parseInt(id),
-      descripcion: `El admin ${activo ? 'activó' : 'desactivó'} la cuenta de "${target.nombre_apellido}"`
+      descripcion: `El admin ${activo ? 'activó' : 'desactivó'} la cuenta de "${target.nombre}"`
     }).catch(err => console.error('Error al registrar actividad:', err))
 
     res.json({ message: `Cuenta ${activo ? 'activada' : 'desactivada'} exitosamente`, data: user })

@@ -462,13 +462,21 @@ const getHistorial = async ({ search, fecha_desde, fecha_hasta, limit, offset })
        u.nombre_apellido,
        u.correo,
        u.ci,
-       COUNT(dp.id_ejemplar) FILTER (
+       COUNT(DISTINCT dp.id_ejemplar) FILTER (
          WHERE dp.estado_prestamo_ejemplar = 'activo'
        ) AS ejemplares_pendientes
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
      JOIN detalles_prestamos dp
        ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
+     -- Clave del fix: exigir que exista una devolución contra el ID PROPIO
+     -- de esta fila. En una cadena renovada, la raíz y las renovaciones
+     -- intermedias también terminan en un estado "cerrado" (devuelto /
+     -- renovacion_finalizada / etc.) sin que nunca se haya registrado una
+     -- devolución física a su propio nombre — solo la renovación que
+     -- efectivamente se devolvió tiene esos registros. Sin este JOIN, un
+     -- mismo préstamo renovado aparecía duplicado (una fila por eslabón).
+     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
      ${whereClause}
      GROUP BY p.id_prestamo, u.id_usuario
      ORDER BY p.fecha_tope_devolucion ASC
@@ -481,7 +489,7 @@ const getHistorial = async ({ search, fecha_desde, fecha_hasta, limit, offset })
 const countHistorial = async ({ search, fecha_desde, fecha_hasta }) => {
   const values = []
   let paramIndex = 1
-  let whereClause = `WHERE p.estado_prestamo IN ('devuelto', 'vencido')`
+  let whereClause = `WHERE p.estado_prestamo IN ('devuelto', 'vencido', 'renovacion_finalizada', 'cerrado_con_perdida')`
 
   if (search) {
     whereClause += ` AND (u.nombre_apellido ILIKE $${paramIndex} OR u.ci ILIKE $${paramIndex} OR u.correo ILIKE $${paramIndex})`
@@ -503,6 +511,7 @@ const countHistorial = async ({ search, fecha_desde, fecha_hasta }) => {
     `SELECT COUNT(DISTINCT p.id_prestamo)
      FROM prestamos p
      JOIN usuarios u ON p.id_usuario = u.id_usuario
+     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
      ${whereClause}`,
     values
   )
@@ -539,20 +548,34 @@ const getPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta, i
   values.push(offset)
 
   const { rows } = await pool.query(
-    `SELECT
-      p.id_prestamo,
-      p.id_prestamo_original,
-      p.numero_renovacion,
-      p.fecha_activacion,
-      p.fecha_tope_devolucion,
-      p.fecha_respuesta,
-      p.estado_prestamo,
-      p.es_reserva,
+    `WITH cadena AS (
+       SELECT
+         p.id_prestamo,
+         COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz,
+         p.id_usuario,
+         p.numero_renovacion,
+         p.fecha_activacion,
+         p.fecha_tope_devolucion,
+         p.fecha_respuesta,
+         p.estado_prestamo,
+         p.es_reserva,
+         p.id_bibliotecario
+       FROM prestamos p
+     )
+     SELECT
+      c.id_raiz AS id_prestamo,
+      MAX(c.numero_renovacion) AS numero_renovacion,
+      MAX(c.fecha_activacion) AS fecha_activacion,
+      MAX(c.fecha_tope_devolucion) AS fecha_tope_devolucion,
+      MAX(c.fecha_respuesta) AS fecha_respuesta,
+      -- Estado del último eslabón de la cadena (el que realmente se cerró)
+      (ARRAY_AGG(c.estado_prestamo ORDER BY c.numero_renovacion DESC))[1] AS estado_prestamo,
+      BOOL_OR(c.es_reserva) AS es_reserva,
       u.id_usuario,
       u.nombre_apellido,
       u.correo,
       u.ci,
-      ba.nombre_apellido AS bibliotecario_activacion,
+      (ARRAY_AGG(ba.nombre_apellido ORDER BY c.numero_renovacion DESC))[1] AS bibliotecario_activacion,
       COUNT(DISTINCT dp.id_ejemplar) FILTER (
         WHERE dp.estado_prestamo_ejemplar NOT IN ('solicitado', 'rechazado', 'cancelado')
       ) AS total_ejemplares,
@@ -563,19 +586,23 @@ const getPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta, i
       BOOL_OR(d.estado_devuelto != 'bueno') AS tiene_problemas,
       (
         BOOL_OR(dp.estado_prestamo_ejemplar IN ('perdido', 'reemplazado'))
-        OR BOOL_OR(p.estado_prestamo = 'cerrado_con_perdida')
+        OR BOOL_OR(c.estado_prestamo = 'cerrado_con_perdida')
       ) AS tiene_perdida,
       MAX(d.fecha_devolucion) AS ultima_devolucion
-    FROM prestamos p
-    JOIN usuarios u ON p.id_usuario = u.id_usuario
+    FROM cadena c
+    JOIN usuarios u ON c.id_usuario = u.id_usuario
     JOIN detalles_prestamos dp
-      ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
+      ON dp.id_prestamo = c.id_raiz
     JOIN ejemplares e ON dp.id_ejemplar = e.id_ejemplar
     JOIN libros l ON e.id_libro = l.id_libro
-    JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
-    LEFT JOIN usuarios ba ON p.id_bibliotecario = ba.id_usuario
+    -- Clave del fix: matchear la devolución contra CUALQUIER eslabón de la
+    -- cadena (c.id_prestamo), no solo contra la raíz. Pero agrupamos por
+    -- c.id_raiz, así que aunque las devoluciones parciales queden repartidas
+    -- entre la renovación #1 y la #2, todas caen en UNA sola fila/card.
+    JOIN devoluciones d ON d.id_prestamo = c.id_prestamo
+    LEFT JOIN usuarios ba ON c.id_bibliotecario = ba.id_usuario
     ${whereClause}
-    GROUP BY p.id_prestamo, u.id_usuario, ba.nombre_apellido
+    GROUP BY c.id_raiz, u.id_usuario
     ORDER BY MAX(d.fecha_devolucion) DESC
     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
     values
@@ -610,10 +637,17 @@ const countPrestamosConDevoluciones = async ({ search, fecha_desde, fecha_hasta,
   }
 
   const { rows } = await pool.query(
-    `SELECT COUNT(DISTINCT p.id_prestamo)
-     FROM prestamos p
-     JOIN usuarios u ON p.id_usuario = u.id_usuario
-     JOIN devoluciones d ON d.id_prestamo = p.id_prestamo
+    `WITH cadena AS (
+       SELECT
+         p.id_prestamo,
+         COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz,
+         p.id_usuario
+       FROM prestamos p
+     )
+     SELECT COUNT(DISTINCT c.id_raiz) AS count
+     FROM cadena c
+     JOIN usuarios u ON c.id_usuario = u.id_usuario
+     JOIN devoluciones d ON d.id_prestamo = c.id_prestamo
      ${whereClause}`,
     values
   )

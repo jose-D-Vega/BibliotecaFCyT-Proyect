@@ -12,14 +12,25 @@ const createSanction = async ({
     // ── Validaciones de duplicado ──────────────────────────────────
 
     // Para tipos vinculados a ejemplar: verificar que no exista ya
-    // una sanción activa del mismo tipo para ese prestamo+ejemplar
+    // una sanción activa del mismo tipo para ese prestamo+ejemplar.
+    // Se chequea contra TODA la cadena de renovaciones (raíz + renovaciones),
+    // porque el mismo préstamo físico puede haber quedado identificado con
+    // distinto id_prestamo según en qué eslabón se creó cada sanción.
     if (id_ejemplar && id_prestamo) {
       const { rows: dupEjemplar } = await client.query(
-        `SELECT 1 FROM sanciones
-         WHERE id_prestamo  = $1
-           AND id_ejemplar  = $2
-           AND tipo_infraccion = $3
-           AND estado_sancion NOT IN ('rechazada', 'resuelta')
+        `WITH raiz AS (
+           SELECT COALESCE(id_prestamo_original, id_prestamo) AS id_raiz
+           FROM prestamos WHERE id_prestamo = $1
+         )
+         SELECT 1 FROM sanciones s
+         WHERE s.id_prestamo IN (
+             SELECT p.id_prestamo FROM prestamos p, raiz
+             WHERE p.id_prestamo = raiz.id_raiz
+                OR p.id_prestamo_original = raiz.id_raiz
+           )
+           AND s.id_ejemplar  = $2
+           AND s.tipo_infraccion = $3
+           AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
          LIMIT 1`,
         [id_prestamo, id_ejemplar, tipo_infraccion]
       )
@@ -32,12 +43,21 @@ const createSanction = async ({
     }
 
     // Para falta_entrega: verificar que no exista ya para ese prestamo
+    // (misma cadena completa: raíz + cualquier renovación)
     if (tipo_infraccion === 'falta_entrega' && id_prestamo) {
       const { rows: dupPrestamo } = await client.query(
-        `SELECT 1 FROM sanciones
-         WHERE id_prestamo     = $1
-           AND tipo_infraccion = 'falta_entrega'
-           AND estado_sancion NOT IN ('rechazada', 'resuelta')
+        `WITH raiz AS (
+           SELECT COALESCE(id_prestamo_original, id_prestamo) AS id_raiz
+           FROM prestamos WHERE id_prestamo = $1
+         )
+         SELECT 1 FROM sanciones s
+         WHERE s.id_prestamo IN (
+             SELECT p.id_prestamo FROM prestamos p, raiz
+             WHERE p.id_prestamo = raiz.id_raiz
+                OR p.id_prestamo_original = raiz.id_raiz
+           )
+           AND s.tipo_infraccion = 'falta_entrega'
+           AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
          LIMIT 1`,
         [id_prestamo]
       )
@@ -504,10 +524,20 @@ const getSanctionsGroupedByLoan = async ({ estado, limit, offset }) => {
   values.push(offset)
 
   const { rows } = await pool.query(
-    `SELECT
-       p.id_prestamo,
-       p.fecha_tope_devolucion,
-       p.estado_prestamo,
+    `WITH cadena AS (
+       SELECT
+         p.id_prestamo,
+         COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz,
+         p.numero_renovacion,
+         p.fecha_tope_devolucion,
+         p.estado_prestamo
+       FROM prestamos p
+     )
+     SELECT
+       c.id_raiz AS id_prestamo,
+       MAX(c.fecha_tope_devolucion) AS fecha_tope_devolucion,
+       -- Estado del último eslabón de la cadena (el que realmente aplica hoy)
+       (ARRAY_AGG(c.estado_prestamo ORDER BY c.numero_renovacion DESC))[1] AS estado_prestamo,
        u.id_usuario,
        u.nombre_apellido AS usuario_nombre,
        u.correo AS usuario_correo,
@@ -524,10 +554,14 @@ const getSanctionsGroupedByLoan = async ({ estado, limit, offset }) => {
        MAX(a.nombre_apellido) AS admin_nombre
      FROM sanciones s
      JOIN usuarios u ON s.id_usuario = u.id_usuario
-     LEFT JOIN prestamos p ON s.id_prestamo = p.id_prestamo
+     -- Clave del fix: resolver por la raíz de la cadena de renovaciones.
+     -- Antes se agrupaba por s.id_prestamo tal cual, así que dos sanciones
+     -- del mismo préstamo físico registradas contra distintos eslabones
+     -- (raíz vs. renovación) terminaban mostrándose como dos cards separadas.
+     LEFT JOIN cadena c ON s.id_prestamo = c.id_prestamo
      LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
      ${whereClause}
-     GROUP BY p.id_prestamo, u.id_usuario, u.nombre_apellido, u.correo, u.ci
+     GROUP BY c.id_raiz, u.id_usuario, u.nombre_apellido, u.correo, u.ci
      ORDER BY MIN(s.fecha_sancion) DESC
      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
     values
@@ -548,8 +582,13 @@ const countSanctionsGrouped = async ({ estado }) => {
   }
 
   const { rows } = await pool.query(
-    `SELECT COUNT(DISTINCT COALESCE(s.id_prestamo::text, s.id_usuario::text || '-' || s.id_sancion::text))
+    `WITH cadena AS (
+       SELECT p.id_prestamo, COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_raiz
+       FROM prestamos p
+     )
+     SELECT COUNT(DISTINCT COALESCE(c.id_raiz::text, s.id_usuario::text || '-' || s.id_sancion::text))
      FROM sanciones s
+     LEFT JOIN cadena c ON s.id_prestamo = c.id_prestamo
      ${whereClause}`,
     values
   )
@@ -585,7 +624,13 @@ const getSanctionsByLoan = async (id_prestamo, estado) => {
      LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
      LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
-     WHERE s.id_prestamo = $1
+     -- El id_prestamo recibido es la raíz de la cadena (así lo devuelve
+     -- ahora getSanctionsGroupedByLoan). Traemos sanciones registradas
+     -- contra CUALQUIER eslabón: la raíz o alguna de sus renovaciones.
+     WHERE s.id_prestamo IN (
+         SELECT id_prestamo FROM prestamos
+         WHERE id_prestamo = $1 OR id_prestamo_original = $1
+       )
        ${estadoFilter}
      ORDER BY s.fecha_sancion ASC`,
     params
@@ -611,9 +656,14 @@ const searchSanctionableLoans = async (search, tipo) => {
   if (tipo === 'falta_entrega') {
     const { rows } = await pool.query(
       `SELECT
-         p.id_prestamo,
+         -- Devolvemos la raíz de la cadena: es el id que usan el resto de
+         -- las consultas de sanciones (dup-check, detalle agrupado, etc.)
+         -- para identificar "el mismo préstamo físico" sin importar en
+         -- qué renovación esté parado hoy.
+         COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_prestamo,
          p.fecha_solicitud,
          p.fecha_tope_devolucion,
+         p.fecha_activacion,
          p.estado_prestamo,
          u.id_usuario,
          u.nombre_apellido,
@@ -622,6 +672,10 @@ const searchSanctionableLoans = async (search, tipo) => {
        FROM prestamos p
        JOIN usuarios u ON p.id_usuario = u.id_usuario
        WHERE p.estado_prestamo = 'vencido'
+         -- Evita traer préstamos activados hace mucho: si ya pasó más de
+         -- un mes desde la activación, no tiene sentido ofrecerlo como
+         -- "sancionable reciente" en el buscador.
+         AND p.fecha_activacion >= CURRENT_DATE - INTERVAL '1 month'
          AND (
            u.nombre_apellido ILIKE $1 OR
            u.correo ILIKE $1 OR
@@ -646,9 +700,13 @@ const searchSanctionableLoans = async (search, tipo) => {
 
   const { rows } = await pool.query(
     `SELECT
-      p.id_prestamo,
+      -- Devolvemos la raíz de la cadena por el mismo motivo que en la rama
+      -- de falta_entrega: es el id que usa el resto del módulo de sanciones
+      -- para identificar el préstamo físico sin importar la renovación actual.
+      COALESCE(p.id_prestamo_original, p.id_prestamo) AS id_prestamo,
       p.fecha_solicitud,
       p.fecha_tope_devolucion,
+      p.fecha_activacion,
       p.estado_prestamo,
       u.id_usuario,
       u.nombre_apellido,
@@ -657,8 +715,15 @@ const searchSanctionableLoans = async (search, tipo) => {
       COUNT(dp.id_ejemplar) AS total_ejemplares
     FROM prestamos p
     JOIN usuarios u ON p.id_usuario = u.id_usuario
-    JOIN detalles_prestamos dp ON p.id_prestamo = dp.id_prestamo
+    -- Clave del fix: los ejemplares de una renovación cuelgan del préstamo
+    -- RAÍZ (id_prestamo_original), nunca del id propio de la renovación.
+    -- Sin el COALESCE, un préstamo renovado nunca matcheaba nada acá.
+    JOIN detalles_prestamos dp
+      ON COALESCE(p.id_prestamo_original, p.id_prestamo) = dp.id_prestamo
     WHERE p.estado_prestamo IN (${placeholders})
+      -- Evita traer todo el historial de devueltos de un usuario: solo
+      -- préstamos activados dentro del último mes aparecen en el buscador.
+      AND p.fecha_activacion >= CURRENT_DATE - INTERVAL '1 month'
       AND (
         u.nombre_apellido ILIKE $1 OR
         u.correo ILIKE $1 OR
@@ -666,10 +731,17 @@ const searchSanctionableLoans = async (search, tipo) => {
       )
       AND EXISTS (
         SELECT 1 FROM detalles_prestamos dp2
-        WHERE dp2.id_prestamo = p.id_prestamo
+        WHERE dp2.id_prestamo = COALESCE(p.id_prestamo_original, p.id_prestamo)
           AND NOT EXISTS (
+            -- La sanción puede haber quedado registrada contra CUALQUIER
+            -- eslabón de la cadena (raíz o alguna renovación), no solo
+            -- contra el id_prestamo de esta fila puntual.
             SELECT 1 FROM sanciones s
-            WHERE s.id_prestamo = p.id_prestamo
+            WHERE s.id_prestamo IN (
+                SELECT id_prestamo FROM prestamos
+                WHERE id_prestamo = COALESCE(p.id_prestamo_original, p.id_prestamo)
+                   OR id_prestamo_original = COALESCE(p.id_prestamo_original, p.id_prestamo)
+              )
               AND s.id_ejemplar = dp2.id_ejemplar
               AND s.tipo_infraccion = $${estados.length + 2}
               AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
@@ -700,7 +772,12 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo, tipo_infraccion) =>
 
   if (prestamo.length === 0) return null
 
+  // Clave del fix: los ejemplares siempre cuelgan de la raíz de la cadena
+  // (id_prestamo_original), nunca del id propio de una renovación.
+  const id_raiz = prestamo[0].id_prestamo_original || id_prestamo
+
   // Si hay tipo_infraccion, filtrar ejemplares ya sancionados de ese tipo
+  // (la sanción puede estar registrada contra cualquier eslabón de la cadena)
   const ejemplaresQuery = tipo_infraccion
     ? `SELECT
          dp.id_ejemplar,
@@ -715,7 +792,10 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo, tipo_infraccion) =>
        WHERE dp.id_prestamo = $1
          AND NOT EXISTS (
            SELECT 1 FROM sanciones s
-           WHERE s.id_prestamo = $1
+           WHERE s.id_prestamo IN (
+               SELECT id_prestamo FROM prestamos
+               WHERE id_prestamo = $1 OR id_prestamo_original = $1
+             )
              AND s.id_ejemplar = dp.id_ejemplar
              AND s.tipo_infraccion = $2
              AND s.estado_sancion NOT IN ('rechazada', 'resuelta')
@@ -734,7 +814,7 @@ const getLoanWithEjemplaresForSanction = async (id_prestamo, tipo_infraccion) =>
        WHERE dp.id_prestamo = $1
        ORDER BY dp.id_ejemplar ASC`
 
-  const params = tipo_infraccion ? [id_prestamo, tipo_infraccion] : [id_prestamo]
+  const params = tipo_infraccion ? [id_raiz, tipo_infraccion] : [id_raiz]
   const { rows: ejemplares } = await pool.query(ejemplaresQuery, params)
 
   return { ...prestamo[0], ejemplares }
@@ -852,7 +932,12 @@ const getAllSanctionsByLoan = async (id_prestamo) => {
      LEFT JOIN usuarios a ON s.id_admin = a.id_usuario
      LEFT JOIN ejemplares e ON s.id_ejemplar = e.id_ejemplar
      LEFT JOIN libros l ON e.id_libro = l.id_libro
-     WHERE s.id_prestamo = $1
+     -- Mismo criterio que getSanctionsByLoan: el id recibido es la raíz
+     -- de la cadena, traer sanciones de cualquier eslabón.
+     WHERE s.id_prestamo IN (
+         SELECT id_prestamo FROM prestamos
+         WHERE id_prestamo = $1 OR id_prestamo_original = $1
+       )
      ORDER BY s.fecha_sancion ASC`,
     [id_prestamo]
   )

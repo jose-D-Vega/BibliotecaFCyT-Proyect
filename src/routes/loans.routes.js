@@ -11,7 +11,8 @@ const {
   getLoanHandler,
   renewLoanHandler,
   approveRenewalHandler,
-  rejectRenewalHandler
+  rejectRenewalHandler,
+  cancelRenewalHandler
 } = require('../controllers/loans.controller')
 const { verifyToken } = require('../middlewares/auth')
 const { isAdmin, isBibliotecario, checkNotSancionado } = require('../middlewares/roles')
@@ -23,6 +24,7 @@ router.post('/', verifyToken, checkNotSancionado, createLoanHandler)
 router.patch('/:id/cancel', verifyToken, cancelLoanHandler)
 router.patch('/:id/cancel-smart', verifyToken, cancelLoanSmartHandler)
 router.patch('/:id/renew', verifyToken, checkNotSancionado, renewLoanHandler)
+router.patch('/:id/renew/cancel', verifyToken, cancelRenewalHandler)
 router.patch('/:id/renew/approve', verifyToken, isBibliotecario, approveRenewalHandler)
 router.patch('/:id/renew/reject', verifyToken, isBibliotecario, rejectRenewalHandler)
 

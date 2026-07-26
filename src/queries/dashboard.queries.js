@@ -123,6 +123,9 @@ const getStaffDashboardStats = async (esAdmin) => {
     // RESERVAS
     pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'solicitud_reserva'`),
 
+    // RENOVACIONES PENDIENTES
+    pool.query(`SELECT COUNT(*) FROM prestamos WHERE estado_prestamo = 'solicitud_renovacion'`),
+
     // PRESTAMOS POR CARRERA
     pool.query(`
       SELECT TRIM(carrera_individual) AS carrera, COUNT(*) AS cantidad
@@ -191,6 +194,7 @@ const getStaffDashboardStats = async (esAdmin) => {
     librosVencidosResult,
     devueltosHoyResult,
     reservasPendientesResult,
+    renovacionesPendientesResult,
     actividadAreaResult,
     tendenciaResult,
     masPrestadosResult,
@@ -221,6 +225,7 @@ const getStaffDashboardStats = async (esAdmin) => {
     librosVencidos: Number(librosVencidosResult.rows[0].count),
     librosDevueltosHoy: Number(devueltosHoyResult.rows[0].count),
     reservasPendientes: Number(reservasPendientesResult.rows[0].count),
+    renovacionesPendientes: Number(renovacionesPendientesResult.rows[0].count),
     actividadPorArea,
     tendenciaMensual: tendenciaResult.rows.map(x => ({
       mes: Number(x.mes),

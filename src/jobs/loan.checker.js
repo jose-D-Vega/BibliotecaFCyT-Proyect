@@ -92,21 +92,21 @@ const verificarPrestamos = async () => {
       }, client)
     }
 
-    // Notificar a admins si hubo solicitudes rechazadas automáticamente por falta de gestión
+    // Notificar a admins y bibliotecarios si hubo solicitudes rechazadas automáticamente por falta de gestión
     if (solicitudesVencidas.length > 0) {
-      const { rows: admins } = await client.query(
-        `SELECT u.id_usuario FROM usuarios u
+      const { rows: staff } = await client.query(
+        `SELECT u.id_usuario, t.nombre_tipo FROM usuarios u
         JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
-        WHERE t.nombre_tipo = 'admin' or t.nombre_tipo = 'bibliotecario' AND u.activo = true`
+        WHERE (t.nombre_tipo = 'admin' OR t.nombre_tipo = 'bibliotecario') AND u.activo = true`
       )
-      for (const admin of admins) {
+      for (const persona of staff) {
         await crearNotificacion({
-          id_usuario: admin.id_usuario,
+          id_usuario: persona.id_usuario,
           tipo: 'admin_solicitud_rechazada',
           titulo: 'Solicitudes rechazadas automáticamente',
           mensaje: `${solicitudesVencidas.length} solicitud${solicitudesVencidas.length > 1 ? 'es' : ''} de préstamo/reserva se rechazó${solicitudesVencidas.length > 1 ? 'aron' : ''} automáticamente por no haber sido gestionada${solicitudesVencidas.length > 1 ? 's' : ''} a tiempo.`,
           id_prestamo: null,
-          rol_destino: 'admin',
+          rol_destino: persona.nombre_tipo,
           unica: true
         }, client)
       }
@@ -343,22 +343,22 @@ const verificarPrestamos = async () => {
       }, client)
     }
 
-    // Notificar a admins si se resolvieron sanciones automáticamente
+    // Notificar a admins y bibliotecarios si se resolvieron sanciones automáticamente
     if (sancionesVencidaSuspension.length > 0) {
-      const { rows: admins } = await client.query(
-        `SELECT u.id_usuario FROM usuarios u
+      const { rows: staff } = await client.query(
+        `SELECT u.id_usuario, t.nombre_tipo FROM usuarios u
         JOIN tipo_usuarios t ON u.id_tipo_usuario = t.id_tipo_usuario
-        WHERE t.nombre_tipo = 'admin' or t.nombre_tipo = 'bibliotecario' AND u.activo = true`
+        WHERE (t.nombre_tipo = 'admin' OR t.nombre_tipo = 'bibliotecario') AND u.activo = true`
       )
 
-      for (const admin of admins) {
+      for (const persona of staff) {
         await crearNotificacion({
-          id_usuario: admin.id_usuario,
+          id_usuario: persona.id_usuario,
           tipo: 'sancion_resuelta',
           titulo: 'Sanciones resueltas automáticamente',
           mensaje: `${sancionesVencidaSuspension.length} sanción${sancionesVencidaSuspension.length > 1 ? 'es fueron resueltas' : ' fue resuelta'} automáticamente por vencimiento del período de suspensión.`,
           id_prestamo: null,
-          rol_destino: 'admin',
+          rol_destino: persona.nombre_tipo,
           unica: true
         }, client)
       }

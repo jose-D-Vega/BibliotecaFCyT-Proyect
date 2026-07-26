@@ -60,6 +60,11 @@ const REPORT_ENTITIES = {
     `,
     columns: {
       id_prestamo:             { label: 'N° Préstamo', expr: 'p.id_prestamo' },
+      // Permiten reconstruir la cadena de renovaciones desde el propio reporte:
+      // id_prestamo_original vacío = es la raíz; numero_renovacion indica el
+      // eslabón (0 o null = préstamo original, 1/2/3 = qué renovación es).
+      id_prestamo_original:    { label: 'N° Préstamo original (si es renovación)', expr: 'p.id_prestamo_original' },
+      numero_renovacion:       { label: 'N° de renovación', expr: 'p.numero_renovacion' },
       usuario:                 { label: 'Usuario', expr: 'u.nombre_apellido' },
       correo_usuario:          { label: 'Correo', expr: 'u.correo' },
       bibliotecario_respuesta:  { label: 'Respondido por', expr: 'b.nombre_apellido' },
@@ -76,6 +81,9 @@ const REPORT_ENTITIES = {
       id_usuario:                  { expr: 'p.id_usuario', op: '=' },
       id_bibliotecario:            { expr: 'p.id_bibliotecario', op: '=' },
       id_bibliotecario_activacion: { expr: 'p.id_bibliotecario_activacion', op: '=' },
+      // Filtrar por préstamo original trae TODA la cadena de renovaciones
+      // de ese préstamo (todas comparten el mismo id_prestamo_original).
+      id_prestamo_original:        { expr: 'p.id_prestamo_original', op: '=' },
       estado_prestamo:             { expr: 'p.estado_prestamo', op: 'IN_ANY' },
       es_reserva:                  { expr: 'p.es_reserva', op: '=' },
       fecha_desde:                 { expr: 'p.fecha_solicitud', op: '>=' },
@@ -158,7 +166,11 @@ const REPORT_ENTITIES = {
         label: 'Incluir datos de devolución',
         joinClause: `
           LEFT JOIN devoluciones dev
-            ON dev.id_prestamo = dp.id_prestamo AND dev.id_ejemplar = dp.id_ejemplar
+            ON dev.id_ejemplar = dp.id_ejemplar
+            AND dev.id_prestamo IN (
+              SELECT id_prestamo FROM prestamos
+              WHERE id_prestamo = dp.id_prestamo OR id_prestamo_original = dp.id_prestamo
+            )
           LEFT JOIN usuarios bib_dev ON bib_dev.id_usuario = dev.id_bibliotecario
         `,
         columns: {
@@ -176,7 +188,11 @@ const REPORT_ENTITIES = {
         label: 'Incluir datos de sanción',
         joinClause: `
           LEFT JOIN sanciones s
-            ON s.id_prestamo = dp.id_prestamo AND s.id_ejemplar = dp.id_ejemplar
+            ON s.id_ejemplar = dp.id_ejemplar
+            AND s.id_prestamo IN (
+              SELECT id_prestamo FROM prestamos
+              WHERE id_prestamo = dp.id_prestamo OR id_prestamo_original = dp.id_prestamo
+            )
           LEFT JOIN usuarios bib_san ON bib_san.id_usuario = s.id_admin
         `,
         columns: {

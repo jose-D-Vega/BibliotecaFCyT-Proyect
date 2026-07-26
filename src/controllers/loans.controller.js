@@ -9,7 +9,8 @@ const {
   getLoanById,
   renewLoan,
   approveRenewal,
-  rejectRenewal
+  rejectRenewal,
+  cancelRenewal
 } = require('../queries/loans.queries')
 const { registrarActividad } = require('../queries/activity.queries')
 const { MAX_EJEMPLARES_POR_SOLICITUD } = require('../config/loans.config')
@@ -385,6 +386,29 @@ const rejectRenewalHandler = async (req, res) => {
   }
 }
 
+const cancelRenewalHandler = async (req, res) => {
+  try {
+    const { id } = req.params
+    const id_usuario = req.user.id_usuario
+    const result = await cancelRenewal(id, id_usuario)
+
+    if (result.error) return res.status(400).json({ error: result.error })
+
+    registrarActividad({
+      id_usuario,
+      tipo_accion: 'cancelar',
+      entidad: 'prestamos',
+      id_entidad: parseInt(id),
+      descripcion: `Canceló su solicitud de renovación del préstamo #${id}`
+    }).catch(err => console.error('Error al registrar actividad:', err))
+
+    res.json({ message: 'Solicitud de renovación cancelada', data: result })
+  } catch (error) {
+    console.error('Error al cancelar renovación:', error)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+}
+
 module.exports = {
   createLoanHandler,
   respondLoanDetailHandler,
@@ -396,5 +420,6 @@ module.exports = {
   getLoanHandler,
   renewLoanHandler,
   approveRenewalHandler,
-  rejectRenewalHandler
+  rejectRenewalHandler,
+  cancelRenewalHandler
 }
